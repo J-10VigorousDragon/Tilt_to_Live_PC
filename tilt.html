@@ -111,9 +111,10 @@
 // ---------------- 配置（想调手感/难度就改这里） ----------------
 const CFG = {
   // 玩家物理
-  playerAccel: 1750,        // 加速度 px/s²（朝鼠标方向）
-  playerMaxSpeed: 430,      // 最高速度 px/s
-  playerDamping: 0.9,       // 速度阻尼（越大滑行越短）
+  playerAccel: 1750,        // 基础加速度 px/s²（近距离细腻控制）
+  playerAccelMax: 3200,     // 距离自适应加速度上限（"磁铁式"：离鼠标越远吸力越强，快速追上）
+  playerMaxSpeed: 520,      // 最高速度 px/s
+  playerDamping: 0.7,       // 速度阻尼（越大滑行越短；0.7 保留滑行感又不太飘）
   playerRadius: 9,          // 碰撞判定半径（故意偏小，还原原版宽容判定）
   mouseStopDist: 60,        // 距离鼠标多近开始"刹车"停下
   // 红点敌人
@@ -464,7 +465,10 @@ function update(dt) {
     const dx = M.x - P.x, dy = M.y - P.y, d = Math.hypot(dx, dy);
     if (d > 1) {
       const nx = dx / d, ny = dy / d;
-      accX = nx * CFG.playerAccel; accY = ny * CFG.playerAccel;
+      // 距离自适应加速度（"磁铁式"）：离得远时强力吸附快速追上鼠标，
+      // 离得近时力度变细腻，便于精控（解决"鼠标与箭头距离过远/不跟手"）
+      const accel = Math.min(CFG.playerAccel + d * 10, CFG.playerAccelMax);
+      accX = nx * accel; accY = ny * accel;
       // 靠近鼠标时刹车（像磁铁吸住，避免抖动）
       if (d < CFG.mouseStopDist) {
         const k = (1 - d / CFG.mouseStopDist) * 2600;
