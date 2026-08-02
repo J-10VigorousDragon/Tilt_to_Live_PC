@@ -129,20 +129,22 @@ M = { x, y, active, dirX, dirY }
 
 ## 4. 核心机制实现
 
-### 4.1 玩家物理（鼠标 = 倾斜方向）
+### 4.1 玩家物理（鼠标 = 重力方向，目标速度控制）
 
 ```
-每帧：
-  dir = 鼠标方向单位向量（鼠标移出窗口时用 _lastDirX/Y）
-  P.vx += dir × CFG.playerAccel × dt
-  若 |P - M| < mouseStopDist：施加反向刹车力（防止围着鼠标抖动）
-  阻尼：P.vx *= exp(-playerDamping × dt)
-  限速：|v| ≤ playerMaxSpeed
-  边缘反弹：撞边时位置钳制 + 速度 × 0.6 弹回
+每帧（M.active 时）：
+  d = |P - M|（箭头到鼠标的距离）
+  targetSpeed = min(max(0, d - R(18)) × 7, playerMaxSpeed)   ← 与距离成正比
+  P.vx += (nx × targetSpeed - P.vx) × min(1, playerFollow × dt)  ← 向目标收敛
+  （nx 为鼠标方向单位向量）
+鼠标移出窗口：P.v *= exp(-playerDamping × dt)   ← 惯性滑行，模拟松开倾斜
+限速：|v| ≤ playerMaxSpeed（烈焰冲刺期除外，放开至 950）
+边缘反弹：撞边时位置钳制 + 速度 × 0.6 弹回
 ```
 
-设计动机：原版是重力感应"持续施力"的手感，鼠标版用"箭头持续加速滑向鼠标"还原，
-而不是把鼠标位置直接映射成箭头位置（那是瞬移，丢失惯性乐趣）。
+设计动机（v3.3 重构）：PD 目标速度控制下，箭头远离鼠标时温和加速、靠近时自然减速——
+**数学上永不冲过头、无振荡**，复刻原版重力体感"温和滑行"的手感；停在鼠标 R(18) 间隙避免
+被光标遮挡。R() 为全局尺寸缩放函数（实体/判定随屏幕等比放大，见 §5）。
 
 ### 4.2 红点追踪
 
@@ -189,6 +191,8 @@ d.x += (dx/dl + wob × (-dy/dl)) × speed × dt
 - 详情数值见 [GAME_DESIGN.md](GAME_DESIGN.md)
 
 ## 5. 渲染管线（每帧绘制顺序）
+
+> 尺寸缩放：实体半径/武器半径/判定距离在**生成与判定处**统一乘以 `R(v) = v × scale`（`scale = max(1, min(W,H)/600)`，resize 时更新）——原版基于 iPhone 4S 小屏，电脑显示器等比放大。背景网格与 HUD 不缩放。
 
 ```
 1. 屏幕震动位移（ctx.translate 随机偏移）

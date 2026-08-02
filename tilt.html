@@ -110,13 +110,12 @@
 
 // ---------------- 配置（想调手感/难度就改这里） ----------------
 const CFG = {
-  // 玩家物理
-  playerAccel: 1750,        // 基础加速度 px/s²（近距离细腻控制）
-  playerAccelMax: 3200,     // 距离自适应加速度上限（"磁铁式"：离鼠标越远吸力越强，快速追上）
-  playerMaxSpeed: 520,      // 最高速度 px/s
-  playerDamping: 0.7,       // 速度阻尼（越大滑行越短；0.7 保留滑行感又不太飘）
-  playerRadius: 9,          // 碰撞判定半径（故意偏小，还原原版宽容判定）
-  mouseStopDist: 60,        // 距离鼠标多近开始"刹车"停下
+  // 玩家物理（v3.3：目标速度控制，复刻原版重力体感的温和手感）
+  playerMaxSpeed: 350,      // 最高速度 px/s（原版体感偏温和，不过度冲撞）
+  playerFollow: 5,          // 向目标速度的收敛系数（越大越跟手；5 保留一点滑行感）
+  playerAccel: 1750,        // 鼠标移出窗口时的持续加速力（模拟持续倾斜）
+  playerDamping: 0.7,       // 鼠标移出窗口后的滑行阻尼
+  playerRadius: 9,          // 碰撞判定半径基准（实际按 scale 等比放大）
   // 红点敌人
   dotRadius: 11,
   fastDotRadius: 7,
@@ -188,12 +187,17 @@ function fanHit(ox, oy, dir, r, halfA, dx, dy) {
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 let W = 0, H = 0;              // 画布尺寸
+// 全局缩放：原版在 iPhone 4S 小屏（约 640 逻辑高度），电脑显示器需等比放大所有物体
+const SCALE_BASE = 600;        // 基准高度（≈ 原版手机逻辑高度量级）
+let scale = 1;                 // 当前缩放因子（resize 时更新）
 function resize() {
   W = canvas.width = window.innerWidth;
   H = canvas.height = window.innerHeight;
+  scale = Math.max(1, Math.min(W, H) / SCALE_BASE);
 }
 window.addEventListener("resize", resize);
 resize();
+const R = (v) => v * scale;    // 尺寸换算：基准值 → 当前屏幕实际像素
 
 const G = {   // 一局游戏的动态状态
   state: "menu",              // menu / playing / dying / over
@@ -291,7 +295,7 @@ function spawnParticle(x, y, vx, vy, life, color, size) {
 function burst(x, y, n, color, speed = 260) {
   for (let i = 0; i < n; i++) {
     const a = Math.random() * Math.PI * 2, s = rand(speed * 0.3, speed);
-    spawnParticle(x, y, Math.cos(a) * s, Math.sin(a) * s, rand(0.35, 0.8), color, rand(1.5, 3.5));
+    spawnParticle(x, y, Math.cos(a) * s, Math.sin(a) * s, rand(0.35, 0.8), color, R(rand(1.5, 3.5)));
   }
 }
 function addRing(x, y, maxR, color, life = 0.5, width = 5) {
@@ -305,7 +309,7 @@ function addFloat(x, y, text, color = "#fff", size = 20) {
 function spawnDot(type) {
   if (G.dots.length >= CFG.maxDots) return;
   const big = type === "big", fast = type === "fast";
-  const r = big ? CFG.bigDotRadius : fast ? CFG.fastDotRadius : CFG.dotRadius;
+  const r = R(big ? CFG.bigDotRadius : fast ? CFG.fastDotRadius : CFG.dotRadius);   // 随屏幕等比放大
   // 在屏幕四周 40px 宽的边缘带里随机生成
   const edge = rand(0, Math.PI * 2);
   const cx = W / 2, cy = H / 2, halfW = W / 2 + 30, halfH = H / 2 + 30;
@@ -323,7 +327,7 @@ function spawnDot(type) {
 function spawnGreen() {
   G.greensList.push({
     x: rand(50, W - 50), y: rand(50, H - 50),
-    r: CFG.greenRadius, phase: rand(0, 6.28),
+    r: R(CFG.greenRadius), phase: rand(0, 6.28),
   });
 }
 function spawnOrb(weaponId) {
@@ -366,11 +370,11 @@ function useWeapon(id) {
   switch (id) {
     case "nuke": {   // 以玩家为中心的大爆炸
       G.shake = 22; G.flash = 0.5;
-      addRing(P.x, P.y, 300, "#ffb45c");
+      addRing(P.x, P.y, R(300), "#ffb45c");
       burst(P.x, P.y, 40, "#ffa54d", 420);
       SFX.nuke();
       for (const d of [...G.dots]) {
-        if (dist2(d.x, d.y, P.x, P.y) < 300 * 300) killDot(d, "nuke");
+        if (dist2(d.x, d.y, P.x, P.y) < R(300) * R(300)) killDot(d, "nuke");
       }
       break;
     }
@@ -389,22 +393,22 @@ function useWeapon(id) {
     }
     case "ice": {    // 冰冻周围
       SFX.ice();
-      addRing(P.x, P.y, 200, "#8fd8ff");
+      addRing(P.x, P.y, R(200), "#8fd8ff");
       for (const d of G.dots) {
-        if (dist2(d.x, d.y, P.x, P.y) < 200 * 200) d.frozen = 5;
+        if (dist2(d.x, d.y, P.x, P.y) < R(200) * R(200)) d.frozen = 5;
       }
       break;
     }
     case "bubble": { // 护盾（已有盾再吃无效）
-      if (!G.shield) { G.shield = true; SFX.bubble(); addRing(P.x, P.y, 60, "#5dff9a", 0.4, 3); }
+      if (!G.shield) { G.shield = true; SFX.bubble(); addRing(P.x, P.y, R(60), "#5dff9a", 0.4, 3); }
       break;
     }
     case "vortex": { // 放置黑洞（3 秒后激活，吸走红点）
       SFX.vortex();
       const a = Math.atan2(M.active ? M.y - P.y : P.vy, M.active ? M.x - P.x : P.vx);
       G.vortexes.push({
-        x: clamp(P.x + Math.cos(a) * 110, 60, W - 60),
-        y: clamp(P.y + Math.sin(a) * 110, 60, H - 60),
+        x: clamp(P.x + Math.cos(a) * R(110), 60, W - 60),
+        y: clamp(P.y + Math.sin(a) * R(110), 60, H - 60),
         countdown: 3, active: false, life: 8,
       });
       break;
@@ -460,36 +464,24 @@ function update(dt) {
     }
   }
 
-  // --- 玩家物理：鼠标 = 倾斜方向 ---
-  let accX = 0, accY = 0;
+  // --- 玩家物理：鼠标 = 重力方向（目标速度控制，复刻原版"温和"手感）---
   if (M.active) {
     const dx = M.x - P.x, dy = M.y - P.y, d = Math.hypot(dx, dy);
     if (d > 1) {
       const nx = dx / d, ny = dy / d;
-      // 距离自适应加速度（"磁铁式"）：只在刹车区外生效（远距离强力吸附快速追上鼠标），
-      // 进入刹车区后恢复基础加速度，避免高速冲入时刹不住而在鼠标附近振荡
-      const accel = d > CFG.mouseStopDist
-        ? Math.min(CFG.playerAccel + (d - CFG.mouseStopDist) * 10, CFG.playerAccelMax)
-        : CFG.playerAccel;
-      accX = nx * accel; accY = ny * accel;
-      // 靠近鼠标时刹车：静态刹车 + 速度相关动态刹车（速度越快刹得越狠，高速也能停稳）
-      if (d < CFG.mouseStopDist) {
-        const sp = Math.hypot(P.vx, P.vy);
-        const k = (1 - d / CFG.mouseStopDist) * 2600 + sp * 3.2;
-        accX -= nx * k; accY -= ny * k;
-      }
+      // 目标速度与距离成正比：离鼠标远则快、越近越自然减速，永不冲过头（PD 控制）
+      // 留 R(18) 跟随间隙：箭头停在鼠标 18px 处，避免被光标遮挡
+      const targetSp = Math.min(Math.max(0, d - R(18)) * 7, CFG.playerMaxSpeed);
+      const f = Math.min(1, CFG.playerFollow * dt);   // 向目标速度的收敛比例
+      P.vx += (nx * targetSp - P.vx) * f;
+      P.vy += (ny * targetSp - P.vy) * f;
     }
   } else {
-    // 鼠标移出窗口：保持最后方向持续加速（模拟持续倾斜）
-    accX = G._lastDirX * CFG.playerAccel * 0.8;
-    accY = G._lastDirY * CFG.playerAccel * 0.8;
+    // 鼠标移出窗口：最后方向惯性滑行（阻尼衰减），模拟松开倾斜
+    P.vx *= Math.exp(-CFG.playerDamping * dt);
+    P.vy *= Math.exp(-CFG.playerDamping * dt);
   }
-  // 施加加速度到速度（P0 回归修复：v2 重排阻尼/限速时误删此行，导致箭头无法移动）
-  P.vx += accX * dt; P.vy += accY * dt;
-  // 阻尼：冲刺期也要阻尼，否则会永久保持更高速度
-  const damp = Math.exp(-CFG.playerDamping * dt);
-  P.vx *= damp; P.vy *= damp;
-  // 限速：仅烈焰冲刺期（aim=false，950px/s）放开常规上限 430，其余一律钳制
+  // 限速：仅烈焰冲刺期（aim=false，950px/s）放开常规上限，其余一律钳制
   const sprinting = G.burnState && !G.burnState.aim;
   if (!sprinting) {
     const sp = Math.hypot(P.vx, P.vy);
@@ -517,9 +509,9 @@ function update(dt) {
     } else {
       // 冲刺：高速前进 + 身后留火墙
       P.vx = Math.cos(bs.dir) * 950; P.vy = Math.sin(bs.dir) * 950;
-      G.walls.push({ x: P.x, y: P.y, life: 4, r: 18 });
+      G.walls.push({ x: P.x, y: P.y, life: 4, r: R(18) });
       for (const d of [...G.dots]) {
-        if (dist2(d.x, d.y, P.x, P.y) < 80 * 80) killDot(d, "burn");
+        if (dist2(d.x, d.y, P.x, P.y) < R(80) * R(80)) killDot(d, "burn");
       }
       if (bs.t <= 0) G.burnState = null;
     }
@@ -534,19 +526,19 @@ function update(dt) {
       if (Math.hypot(P.vx, P.vy) > 30) a = Math.atan2(P.vy, P.vx);
       else if (M.active) a = Math.atan2(M.y - P.y, M.x - P.x);
       else a = G._lastDirX ? Math.atan2(G._lastDirY, G._lastDirX) : 0;
-      G.fans.push({ x: P.x, y: P.y, dir: a, life: 0.9, halfA: 0.55 });  // 半角≈31.5°（张角约63°）
+      G.fans.push({ x: P.x, y: P.y, dir: a, halfA: 0.55, t: 0, speed: 900 });  // 半角≈31.5°（张角约63°）
       SFX.wave();
     }
   }
-  // 扇形冲击波：半径随时间外扩，扇形路径上的红点被扫中即灭
+  // 扇形冲击波：从发射点沿面朝方向持续推进（半径按速度增长），直到覆盖整个地图
   for (let i = G.fans.length - 1; i >= 0; i--) {
     const f = G.fans[i];
-    f.life -= dt;
-    f.r = 20 + 220 * (1 - f.life / 0.9);   // 半径从 20 扩到约 240px
+    f.t += dt;
+    f.r = f.speed * f.t;                  // 半径 = 波已推进的距离
     for (const d of [...G.dots]) {
       if (fanHit(f.x, f.y, f.dir, f.r, f.halfA, d.x, d.y)) killDot(d, "wave");
     }
-    if (f.life <= 0) G.fans.splice(i, 1);
+    if (f.r > Math.hypot(W, H) + 200) G.fans.splice(i, 1);   // 冲过地图尽头后消散
   }
 
   // --- 武器持续效果 ---
@@ -573,14 +565,14 @@ function update(dt) {
     if (G.lightningTick <= 0) {
       G.lightningTick = 0.28;
       // 随机电 4 个附近的红点，被电的会连锁传电
-      const near = G.dots.filter(d => dist2(d.x, d.y, P.x, P.y) < 190 * 190);
+      const near = G.dots.filter(d => dist2(d.x, d.y, P.x, P.y) < R(190) * R(190));
       for (let i = 0; i < 4 && near.length; i++) {
         const d = near.splice(randInt(0, near.length - 1), 1)[0];
         d.shocked = 0.4;
         if (G.dots.includes(d)) killDot(d, "lightning");
         // 连锁：传给 90px 内的其他红点
         for (const o of [...G.dots]) {
-          if (dist2(o.x, o.y, d.x, d.y) < 90 * 90) {
+          if (dist2(o.x, o.y, d.x, d.y) < R(90) * R(90)) {
             o.shocked = 0.4;
             if (G.dots.includes(o)) killDot(o, "lightning");
           }
@@ -649,15 +641,15 @@ function update(dt) {
   }
   // 碰撞判定：红点碰到箭头 → 冰雕优先撞碎 / 护盾 / 无敌 / 死亡
   for (const d of G.dots) {
-    if (dist2(d.x, d.y, P.x, P.y) < (d.r + CFG.playerRadius) * (d.r + CFG.playerRadius)) {
+    if (dist2(d.x, d.y, P.x, P.y) < (d.r + R(CFG.playerRadius)) * (d.r + R(CFG.playerRadius))) {
       if (d.frozen) {          // 冰雕：无论是否无敌都能撞碎（+10 分，不重置连击）
         killDot(d, "ice");
       } else if (G.shield) {          // 护盾挡下并爆炸
         G.shield = false;
         G.shake = 18; G.flash = 0.4;
-        addRing(P.x, P.y, 220, "#5dff9a");
+        addRing(P.x, P.y, R(220), "#5dff9a");
         SFX.bubble(); SFX.nuke();
-        for (const o of [...G.dots]) if (dist2(o.x, o.y, P.x, P.y) < 220 * 220) killDot(o, "shield");
+        for (const o of [...G.dots]) if (dist2(o.x, o.y, P.x, P.y) < R(220) * R(220)) killDot(o, "shield");
       } else if (G.invincible > 0) {
         if (G.spikeT > 0) killDot(d, "spike");   // 刺球直接碾碎
       } else {
@@ -670,7 +662,7 @@ function update(dt) {
   // --- 绿点收集 ---
   for (let i = G.greensList.length - 1; i >= 0; i--) {
     const gp = G.greensList[i];
-    if (dist2(gp.x, gp.y, P.x, P.y) < CFG.greenCollectDist * CFG.greenCollectDist) {
+    if (dist2(gp.x, gp.y, P.x, P.y) < R(CFG.greenCollectDist) * R(CFG.greenCollectDist)) {
       G.greensList.splice(i, 1);
       G.greens++; G.score++;
       G.greensTotal++; saveGreensTotal(G.greensTotal);   // 武器货币实时持久化
@@ -684,7 +676,7 @@ function update(dt) {
   // --- 武器球收集 ---
   for (let i = G.orbs.length - 1; i >= 0; i--) {
     const ob = G.orbs[i];
-    if (dist2(ob.x, ob.y, P.x, P.y) < CFG.orbCollectDist * CFG.orbCollectDist) {
+    if (dist2(ob.x, ob.y, P.x, P.y) < R(CFG.orbCollectDist) * R(CFG.orbCollectDist)) {
       G.orbs.splice(i, 1);
       useWeapon(ob.id);
       // 不在此延迟补刷——同帧下方"不足即补"已保证数量恒定，避免溢出
@@ -709,9 +701,9 @@ function update(dt) {
     ms.x += ms.vx * dt; ms.y += ms.vy * dt;
     // 命中判定
     for (const d of [...G.dots]) {
-      if (dist2(d.x, d.y, ms.x, ms.y) < (d.r + 8) * (d.r + 8)) {
+      if (dist2(d.x, d.y, ms.x, ms.y) < (d.r + R(8)) * (d.r + R(8))) {
         killDot(d, "missile");
-        addRing(ms.x, ms.y, 80, "#ff9a6b", 0.3, 4);
+        addRing(ms.x, ms.y, R(80), "#ff9a6b", 0.3, 4);
         dead = true;
         break;
       }
@@ -724,9 +716,9 @@ function update(dt) {
     b.x += b.vx * dt; b.y += b.vy * dt;
     let hit = false;
     for (const d of G.dots) {
-      if (dist2(d.x, d.y, b.x, b.y) < (d.r + 6) * (d.r + 6)) {
+      if (dist2(d.x, d.y, b.x, b.y) < (d.r + R(6)) * (d.r + R(6))) {
         killDot(d, "turret");
-        addRing(b.x, b.y, 70, "#7db2ff", 0.25, 3);
+        addRing(b.x, b.y, R(70), "#7db2ff", 0.25, 3);
         hit = true; break;
       }
     }
@@ -742,14 +734,14 @@ function update(dt) {
     for (let j = G.dots.length - 1; j >= 0; j--) {
       const d = G.dots[j];
       const dx = v.x - d.x, dy = v.y - d.y, dl = Math.hypot(dx, dy) || 1;
-      if (dl < 300) {
-        const pull = 420 * (1 - dl / 300);
+      if (dl < R(300)) {
+        const pull = R(420) * (1 - dl / R(300));
         d.x += (dx / dl) * pull * dt; d.y += (dy / dl) * pull * dt;
-        if (dl < 26) { G.dots.splice(j, 1); burst(v.x, v.y, 5, "#b48cff", 180); G.score += 10; SFX.kill(); }
+        if (dl < R(26)) { G.dots.splice(j, 1); burst(v.x, v.y, 5, "#b48cff", 180); G.score += 10; SFX.kill(); }
       }
     }
     const pdx = v.x - P.x, pdy = v.y - P.y, pdl = Math.hypot(pdx, pdy) || 1;
-    if (pdl < 260 && pdl > 60) { P.x += (pdx / pdl) * 90 * dt; P.y += (pdy / pdl) * 90 * dt; }
+    if (pdl < R(260) && pdl > R(60)) { P.x += (pdx / pdl) * R(90) * dt; P.y += (pdy / pdl) * R(90) * dt; }
     if (v.life <= 0) G.vortexes.splice(i, 1);
   }
 
@@ -935,10 +927,10 @@ function draw() {
     ctx.translate(ob.x, ob.y + bob);
     ctx.fillStyle = w.color;
     ctx.shadowColor = w.color; ctx.shadowBlur = 18;
-    ctx.beginPath(); ctx.arc(0, 0, CFG.orbRadius, 0, 6.29); ctx.fill();
+    ctx.beginPath(); ctx.arc(0, 0, R(CFG.orbRadius), 0, 6.29); ctx.fill();
     ctx.shadowBlur = 0;
     ctx.fillStyle = "#0b1033";
-    ctx.font = "bold 22px sans-serif";
+    ctx.font = `bold ${R(22)}px sans-serif`;
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText(w.sym, 0, 1);
     ctx.restore();
@@ -983,7 +975,7 @@ function draw() {
       ctx.textAlign = "center"; ctx.textBaseline = "middle";
       ctx.fillText(Math.ceil(v.countdown), 0, 1);
     } else {
-      const pulse = 30 + Math.sin(G.time * 9) * 4;
+      const pulse = R(30) + Math.sin(G.time * 9) * 4;
       const g3 = ctx.createRadialGradient(0, 0, 2, 0, 0, pulse);
       g3.addColorStop(0, "rgba(20,10,50,0.95)");
       g3.addColorStop(0.7, "rgba(110,70,220,0.5)");
@@ -1006,9 +998,9 @@ function draw() {
     ctx.restore();
   }
 
-  // 扇形冲击波（Wave）：从玩家处外扩的紫色扇形
+  // 扇形冲击波（Wave）：从玩家处沿面朝方向推进的紫色扇形（直到地图尽头）
   for (const f of G.fans) {
-    const alpha = clamp(f.life / 0.9, 0, 1) * 0.85;
+    const alpha = (clamp(1 - f.r / (Math.hypot(W, H) + 200), 0, 1) * 0.7 + 0.3) * 0.85;  // 推进越远越淡
     ctx.save();
     ctx.translate(f.x, f.y);
     ctx.rotate(f.dir);
@@ -1045,7 +1037,7 @@ function draw() {
     ctx.strokeStyle = "rgba(93,255,154,0.85)";
     ctx.lineWidth = 3;
     ctx.shadowColor = "#5dff9a"; ctx.shadowBlur = 14;
-    ctx.beginPath(); ctx.arc(P.x, P.y, 26, 0, 6.29); ctx.stroke();
+    ctx.beginPath(); ctx.arc(P.x, P.y, R(26), 0, 6.29); ctx.stroke();
     ctx.shadowBlur = 0;
   }
   if (G.spikeT > 0) {
@@ -1060,7 +1052,7 @@ function draw() {
     ctx.beginPath();
     for (let k = 0; k < 14; k++) {
       const a = (k / 14) * Math.PI * 2;
-      const r1 = k % 2 ? 16 : 26;
+      const r1 = k % 2 ? R(16) : R(26);
       ctx[k ? "lineTo" : "moveTo"](Math.cos(a) * r1, Math.sin(a) * r1);
     }
     ctx.closePath(); ctx.fill(); ctx.stroke();
@@ -1069,11 +1061,11 @@ function draw() {
     // 闪电期间：玩家周围电弧
     ctx.strokeStyle = "rgba(255,250,200,0.9)";
     ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(P.x, P.y, 22, 0, 6.29); ctx.stroke();
+    ctx.beginPath(); ctx.arc(P.x, P.y, R(22), 0, 6.29); ctx.stroke();
     for (let k = 0; k < 4; k++) {
       const a = G.time * 10 + k * 1.6;
-      const x1 = P.x + Math.cos(a) * 24, y1 = P.y + Math.sin(a) * 24;
-      const x2 = P.x + Math.cos(a + 0.5) * 40, y2 = P.y + Math.sin(a + 0.5) * 40;
+      const x1 = P.x + Math.cos(a) * R(24), y1 = P.y + Math.sin(a) * R(24);
+      const x2 = P.x + Math.cos(a + 0.5) * R(40), y2 = P.y + Math.sin(a + 0.5) * R(40);
       ctx.beginPath(); ctx.moveTo(x1, y1);
       ctx.lineTo((x1 + x2) / 2 + rand(-6, 6), (y1 + y2) / 2 + rand(-6, 6));
       ctx.lineTo(x2, y2); ctx.stroke();
@@ -1084,9 +1076,9 @@ function draw() {
     ctx.save();
     ctx.translate(P.x, P.y); ctx.rotate(a);
     ctx.fillStyle = "#5d9aff";
-    ctx.beginPath(); ctx.arc(0, 0, 15, 0, 6.29); ctx.fill();
+    ctx.beginPath(); ctx.arc(0, 0, R(15), 0, 6.29); ctx.fill();
     ctx.fillStyle = "#1a2a6c";
-    ctx.fillRect(4, -6, 16, 12);
+    ctx.fillRect(R(4), R(-6), R(16), R(12));
     ctx.restore();
   }
   // 箭头本体（带尾焰/蓄力指示）
@@ -1125,7 +1117,7 @@ function draw() {
     const prog = 1 - G.waveCharge / 0.5;
     ctx.strokeStyle = "rgba(200,160,255,0.8)";
     ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.arc(P.x, P.y, 26 + prog * 14, 0, 6.29); ctx.stroke();
+    ctx.beginPath(); ctx.arc(P.x, P.y, R(26) + prog * R(14), 0, 6.29); ctx.stroke();
   }
   // 烈焰瞄准指示
   if (G.burnState && G.burnState.aim) {
@@ -1133,7 +1125,7 @@ function draw() {
     ctx.save();
     ctx.translate(P.x, P.y); ctx.rotate(a);
     ctx.fillStyle = `rgba(255,150,60,${0.4 + 0.4 * Math.sin(G.time * 14)})`;
-    ctx.beginPath(); ctx.moveTo(40, 0); ctx.lineTo(-14, -16); ctx.lineTo(-6, 0); ctx.lineTo(-14, 16);
+    ctx.beginPath(); ctx.moveTo(R(40), 0); ctx.lineTo(R(-14), R(-16)); ctx.lineTo(R(-6), 0); ctx.lineTo(R(-14), R(16));
     ctx.closePath(); ctx.fill();
     ctx.restore();
   }
@@ -1157,7 +1149,7 @@ function draw() {
   }
 }
 
-// 箭头绘制：尖头朝运动方向，带一点尾光
+// 箭头绘制：尖头朝运动方向，带一点尾光（尺寸随屏幕缩放）
 function drawArrow() {
   const sp = Math.hypot(P.vx, P.vy);
   const a = sp > 20 ? Math.atan2(P.vy, P.vx)
@@ -1169,10 +1161,10 @@ function drawArrow() {
   ctx.fillStyle = "#ffffff";
   ctx.shadowColor = "rgba(160,190,255,0.9)"; ctx.shadowBlur = 12;
   ctx.beginPath();
-  ctx.moveTo(16, 0);            // 尖
-  ctx.lineTo(-9, -7);
-  ctx.lineTo(-3, 0);
-  ctx.lineTo(-9, 7);
+  ctx.moveTo(R(16), 0);            // 尖
+  ctx.lineTo(R(-9), R(-7));
+  ctx.lineTo(R(-3), 0);
+  ctx.lineTo(R(-9), R(7));
   ctx.closePath();
   ctx.fill();
   ctx.shadowBlur = 0;

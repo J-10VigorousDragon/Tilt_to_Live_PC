@@ -24,11 +24,11 @@ const drive = n => { for (let i = 0; i < n; i++) { const fn = rafQueue.shift(); 
 
 run("startGame()");
 
-// 场景 1：远距离追鼠（鼠标甩到屏幕对角）
+// 场景 1：远距离追鼠（鼠标甩到屏幕对角；PD 控制限速 350，温和滑行，4 秒应追近）
 run("M.x=1000; M.y=650; M.active=true; P.x=200; P.y=300; P.vx=0; P.vy=0");
 let d1 = Infinity;
-for (let i = 0; i < 120; i++) { drive(1); d1 = Math.hypot(1000 - run("P.x"), 650 - run("P.y")); }
-console.log("场景1 远端追鼠 2s: 距离=" + d1.toFixed(0) + "px（期望 < 60 已停稳）");
+for (let i = 0; i < 240; i++) { drive(1); d1 = Math.hypot(1000 - run("P.x"), 650 - run("P.y")); }
+console.log("场景1 远端追鼠 4s: 距离=" + d1.toFixed(0) + "px（期望 < 150 已追近）");
 
 // 场景 2：高速冲入鼠标附近（模拟追鼠后停靠），检查 3 秒内是否稳定不振荡
 run("M.x=600; M.y=400; P.x=560; P.y=400; P.vx=500; P.vy=0");
@@ -40,4 +40,4 @@ for (let i = 0; i < 180; i++) {
   prevD = d;
 }
 console.log("场景2 高速冲入 3s: 末距离=" + prevD.toFixed(1) + "px, 振荡帧数=" + osc + "（期望 <5）");
-console.log(prevD < 80 && osc < 5 ? "✅ 物理修复验证通过" : "❌ 仍不稳定");
+console.log(d1 < 150 && prevD < 30 && osc < 5 ? "✅ 物理修复验证通过" : "❌ 仍不稳定");
