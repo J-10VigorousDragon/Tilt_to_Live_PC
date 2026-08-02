@@ -172,6 +172,14 @@ const rand = (a, b) => a + Math.random() * (b - a);
 const randInt = (a, b) => Math.floor(rand(a, b + 1));
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const dist2 = (ax, ay, bx, by) => { const dx = ax - bx, dy = ay - by; return dx * dx + dy * dy; };
+// 扇形命中判定：点 (dx,dy) 是否在中心 (ox,oy)、方向角 dir、当前半径 r、半角 halfA 的扇形内
+function fanHit(ox, oy, dir, r, halfA, dx, dy) {
+  const rx = dx - ox, ry = dy - oy;
+  if (rx * rx + ry * ry > r * r) return false;          // 超出当前半径（未扩散到）
+  const dl = Math.hypot(rx, ry) || 1;
+  const ca = Math.cos(dir), sa = Math.sin(dir);
+  return (rx * ca + ry * sa) / dl > Math.cos(halfA);     // 与波方向的夹角小于半角
+}
 
 // ---------------- 画布与全局状态 ----------------
 const canvas = document.getElementById("game");
@@ -207,6 +215,7 @@ const G = {   // 一局游戏的动态状态
   redFlash: 0,                // 死亡红闪
   dots: [], greensList: [], orbs: [],
   particles: [], rings: [], missiles: [], bullets: [], vortexes: [], walls: [],
+  fans: [],                 // 扇形冲击波
   floats: [],                 // 飘字（得分提示）
   spawnAcc: 0,
   best: 0,
@@ -466,12 +475,15 @@ function update(dt) {
     accX = G._lastDirX * CFG.playerAccel * 0.8;
     accY = G._lastDirY * CFG.playerAccel * 0.8;
   }
-  P.vx += accX * dt; P.vy += accY * dt;
-  // 阻尼 + 限速
+  // 阻尼：冲刺期也要阻尼，否则会永久保持更高速度
   const damp = Math.exp(-CFG.playerDamping * dt);
   P.vx *= damp; P.vy *= damp;
-  const sp = Math.hypot(P.vx, P.vy);
-  if (sp > CFG.playerMaxSpeed) { P.vx = P.vx / sp * CFG.playerMaxSpeed; P.vy = P.vy / sp * CFG.playerMaxSpeed; }
+  // 限速：仅烈焰冲刺期（aim=false，950px/s）放开常规上限 430，其余一律钳制
+  const sprinting = G.burnState && !G.burnState.aim;
+  if (!sprinting) {
+    const sp = Math.hypot(P.vx, P.vy);
+    if (sp > CFG.playerMaxSpeed) { P.vx = P.vx / sp * CFG.playerMaxSpeed; P.vy = P.vy / sp * CFG.playerMaxSpeed; }
+  }
   P.x += P.vx * dt; P.y += P.vy * dt;
   // 撞边反弹（保留一点弹性，手感更"滑"）
   const m = 16;
@@ -506,15 +518,24 @@ function update(dt) {
     G.waveCharge -= dt;
     P.vx *= 0.6; P.vy *= 0.6;   // 蓄力时减速
     if (G.waveCharge <= 0) {
-      // 朝当前移动方向（或鼠标方向）发射冲击波
+      // 朝当前移动方向（或鼠标方向）张开扇形冲击波（圆弧扩散）
       let a;
       if (Math.hypot(P.vx, P.vy) > 30) a = Math.atan2(P.vy, P.vx);
       else if (M.active) a = Math.atan2(M.y - P.y, M.x - P.x);
       else a = G._lastDirX ? Math.atan2(G._lastDirY, G._lastDirX) : 0;
-      const s = { x: P.x + Math.cos(a) * 30, y: P.y + Math.sin(a) * 30, vx: Math.cos(a) * 720, vy: Math.sin(a) * 720, life: 0.9, r: 34 };
-      G.missiles.push({ ...s, wave: true });   // 复用导弹数组，wave 标记
+      G.fans.push({ x: P.x, y: P.y, dir: a, life: 0.9, halfA: 0.55 });  // 半角≈31.5°（张角约63°）
       SFX.wave();
     }
+  }
+  // 扇形冲击波：半径随时间外扩，扇形路径上的红点被扫中即灭
+  for (let i = G.fans.length - 1; i >= 0; i--) {
+    const f = G.fans[i];
+    f.life -= dt;
+    f.r = 20 + 220 * (1 - f.life / 0.9);   // 半径从 20 扩到约 240px
+    for (const d of [...G.dots]) {
+      if (fanHit(f.x, f.y, f.dir, f.r, f.halfA, d.x, d.y)) killDot(d, "wave");
+    }
+    if (f.life <= 0) G.fans.splice(i, 1);
   }
 
   // --- 武器持续效果 ---
@@ -586,10 +607,12 @@ function update(dt) {
       }
     }
   }
-  // 碰撞判定：红点碰到箭头 → 护盾/无敌/死亡
+  // 碰撞判定：红点碰到箭头 → 冰雕优先撞碎 / 护盾 / 无敌 / 死亡
   for (const d of G.dots) {
     if (dist2(d.x, d.y, P.x, P.y) < (d.r + CFG.playerRadius) * (d.r + CFG.playerRadius)) {
-      if (G.shield) {          // 护盾挡下并爆炸
+      if (d.frozen) {          // 冰雕：无论是否无敌都能撞碎（+10 分，不重置连击）
+        killDot(d, "ice");
+      } else if (G.shield) {          // 护盾挡下并爆炸
         G.shield = false;
         G.shake = 18; G.flash = 0.4;
         addRing(P.x, P.y, 220, "#5dff9a");
@@ -597,7 +620,6 @@ function update(dt) {
         for (const o of [...G.dots]) if (dist2(o.x, o.y, P.x, P.y) < 220 * 220) killDot(o, "shield");
       } else if (G.invincible > 0) {
         if (G.spikeT > 0) killDot(d, "spike");   // 刺球直接碾碎
-        else if (d.frozen) killDot(d, "ice");    // 冰雕撞碎
       } else {
         die();
         return;
@@ -624,39 +646,33 @@ function update(dt) {
     if (dist2(ob.x, ob.y, P.x, P.y) < CFG.orbCollectDist * CFG.orbCollectDist) {
       G.orbs.splice(i, 1);
       useWeapon(ob.id);
-      setTimeout(() => { if (G.state === "playing") spawnOrb(randomOrbId()); }, 800);
+      // 不在此延迟补刷——同帧下方"不足即补"已保证数量恒定，避免溢出
     }
   }
   if (G.orbs.length < CFG.orbCount) spawnOrb(randomOrbId());
 
-  // --- 导弹 / 冲击波 / 炮塔子弹 ---
+  // --- 追踪导弹 / 炮塔子弹 ---
   for (let i = G.missiles.length - 1; i >= 0; i--) {
     const ms = G.missiles[i];
     ms.life -= dt;
     let dead = false;
-    if (ms.wave) {   // 冲击波：直线前进，路径上杀红点
-      ms.x += ms.vx * dt; ms.y += ms.vy * dt;
-      for (const d of [...G.dots]) {
-        if (dist2(d.x, d.y, ms.x, ms.y) < 46 * 46) killDot(d, "wave");
-      }
-    } else {   // 追踪导弹
-      let tx = ms.x + ms.vx, ty = ms.y + ms.vy, best = 1e18;
-      for (const d of G.dots) {
-        const dd = dist2(d.x, d.y, ms.x, ms.y);
-        if (dd < best) { best = dd; tx = d.x; ty = d.y; }
-      }
-      const a = Math.atan2(ty - ms.y, tx - ms.x);
-      const sp = Math.hypot(ms.vx, ms.vy);
-      ms.vx = Math.cos(a) * sp; ms.vy = Math.sin(a) * sp;
-      ms.x += ms.vx * dt; ms.y += ms.vy * dt;
-      // 命中判定
-      for (const d of [...G.dots]) {
-        if (dist2(d.x, d.y, ms.x, ms.y) < (d.r + 8) * (d.r + 8)) {
-          killDot(d, "missile");
-          addRing(ms.x, ms.y, 80, "#ff9a6b", 0.3, 4);
-          dead = true;
-          break;
-        }
+    // 追踪导弹
+    let tx = ms.x + ms.vx, ty = ms.y + ms.vy, best = 1e18;
+    for (const d of G.dots) {
+      const dd = dist2(d.x, d.y, ms.x, ms.y);
+      if (dd < best) { best = dd; tx = d.x; ty = d.y; }
+    }
+    const a = Math.atan2(ty - ms.y, tx - ms.x);
+    const sp = Math.hypot(ms.vx, ms.vy);
+    ms.vx = Math.cos(a) * sp; ms.vy = Math.sin(a) * sp;
+    ms.x += ms.vx * dt; ms.y += ms.vy * dt;
+    // 命中判定
+    for (const d of [...G.dots]) {
+      if (dist2(d.x, d.y, ms.x, ms.y) < (d.r + 8) * (d.r + 8)) {
+        killDot(d, "missile");
+        addRing(ms.x, ms.y, 80, "#ff9a6b", 0.3, 4);
+        dead = true;
+        break;
       }
     }
     if (dead || ms.life <= 0) G.missiles.splice(i, 1);
@@ -804,7 +820,7 @@ function startGame() {
   G.shake = 0; G.flash = 0; G.redFlash = 0;
   G.dots = []; G.greensList = []; G.orbs = [];
   G.particles = []; G.rings = []; G.missiles = []; G.bullets = [];
-  G.vortexes = []; G.walls = []; G.floats = [];
+  G.vortexes = []; G.walls = []; G.floats = []; G.fans = [];
   G.spawnAcc = 0; G.turretFire = 0; G.lightningTick = 0;
   G.unlocked = new Set(STARTER_ORBS);
   G.nextWeapon = UNLOCKS[0];
@@ -918,27 +934,47 @@ function draw() {
     ctx.restore();
   }
 
-  // 导弹与冲击波
+  // 导弹（追踪导弹）——冲击波（wave）已改为 G.fans 扇形，不再走此数组
   for (const ms of G.missiles) {
-    if (ms.wave) {
-      const g4 = ctx.createRadialGradient(ms.x, ms.y, 4, ms.x, ms.y, ms.r);
-      g4.addColorStop(0, "rgba(200,160,255,0.9)");
-      g4.addColorStop(1, "rgba(160,100,255,0)");
-      ctx.fillStyle = g4;
-      ctx.beginPath(); ctx.arc(ms.x, ms.y, ms.r, 0, 6.29); ctx.fill();
-    } else {
-      const a = Math.atan2(ms.vy, ms.vx);
-      ctx.save();
-      ctx.translate(ms.x, ms.y); ctx.rotate(a);
-      ctx.fillStyle = "#ffb0b0";
-      ctx.beginPath();
-      ctx.moveTo(10, 0); ctx.lineTo(-6, -4); ctx.lineTo(-2, 0); ctx.lineTo(-6, 4);
-      ctx.closePath(); ctx.fill();
-      ctx.restore();
-    }
+    const a = Math.atan2(ms.vy, ms.vx);
+    ctx.save();
+    ctx.translate(ms.x, ms.y); ctx.rotate(a);
+    ctx.fillStyle = "#ffb0b0";
+    ctx.beginPath();
+    ctx.moveTo(10, 0); ctx.lineTo(-6, -4); ctx.lineTo(-2, 0); ctx.lineTo(-6, 4);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
   }
 
-  // 炮塔子弹
+  // 扇形冲击波（Wave）：从玩家处外扩的紫色扇形
+  for (const f of G.fans) {
+      const alpha = clamp(f.life / 0.9, 0, 1) * 0.85;
+      ctx.save();
+      ctx.translate(f.x, f.y);
+      ctx.rotate(f.dir);
+      ctx.globalAlpha = alpha;
+      // 半透明外缘（弧形渐隐）
+      const grad = ctx.createRadialGradient(0, 0, f.r * 0.3, 0, 0, f.r);
+      grad.addColorStop(0, "rgba(180,130,255,0.5)");
+      grad.addColorStop(0.6, "rgba(160,100,255,0.25)");
+      grad.addColorStop(1, "rgba(120,70,200,0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(0, 0, f.r, -f.halfA, f.halfA);
+      ctx.lineTo(0, 0);
+      ctx.closePath();
+      ctx.fill();
+      // 圆弧外缘线条
+      ctx.strokeStyle = "rgba(200,170,255,0.6)";
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(0, 0, f.r, -f.halfA, f.halfA);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
+
+    // 炮塔子弹
   ctx.fillStyle = "#8fb8ff";
   for (const b of G.bullets) {
     ctx.beginPath(); ctx.arc(b.x, b.y, 3.5, 0, 6.29); ctx.fill();

@@ -100,8 +100,8 @@ menu ──startGame()──▶ playing ──P键──▶ paused
 | `burnState` | object|null | 烈焰冲刺状态（瞄准中 / 冲刺中） |
 | `waveCharge` | number | 冲击波蓄力计时 |
 | `dots` / `greensList` / `orbs` | array | 红点 / 绿点 / 武器球实体 |
-| `missiles` / `bullets` | array | 导弹与冲击波（wave 标记复用同一数组）/ 炮塔子弹 |
-| `vortexes` / `walls` | array | 黑洞 / 火墙实体 |
+| `missiles` / `bullets` | array | 追踪导弹 / 炮塔子弹 |
+| `vortexes` / `walls` / `fans` | array | 黑洞 / 火墙实体 / 扇形冲击波 |
 | `particles` / `rings` / `floats` | array | 特效（粒子 / 冲击波圆环 / 飘字） |
 | `shake` / `flash` / `redFlash` | number | 屏幕震动 / 白闪 / 死亡红闪强度 |
 | `spawnAcc` | number | 红点生成累加器（≥1 生成一个） |
@@ -151,8 +151,9 @@ wobble = sin(time × 3 + phase) × 0.35   ← 垂直方向的摆动，避免直�
 d.x += (dx/dl + wob × (-dy/dl)) × speed × dt
 红点互碰：O(n²) 两两检查，重叠时对半分推（早退优化：先算平方距离）
 玩家判定：距离 < (d.r + playerRadius)² 时：
+  冰雕（frozen）→ 优先撞碎，谁都能碎（+10 分，不重置连击）
   护盾激活 → 消耗护盾 + 爆炸清场
-  无敌（invincible > 0）→ 刺球碾碎 / 冰雕撞碎
+  无敌（invincible > 0）→ 刺球碾碎
   否则 → die()
 ```
 
@@ -178,7 +179,7 @@ d.x += (dx/dl + wob × (-dy/dl)) × speed × dt
 
 ### 4.5 武器系统
 
-- 场上同时存在 `CFG.orbCount`(3) 个武器球，收一个、0.8s 后从"已解锁池"随机刷新一个
+- 场上同时存在 `CFG.orbCount`(3) 个武器球，收一个后同帧补刷，从"已解锁池"随机刷新一个（保持数量恒定，避免溢出）
 - 解锁：累计绿点达到 `UNLOCKS` 门槛 → 加入已解锁池 + 飘字/音效提示
 - 释放：`useWeapon(id)` 立即生效（冲击波/烈焰有蓄力演出）
 - 详情数值见 [GAME_DESIGN.md](GAME_DESIGN.md)
@@ -189,7 +190,7 @@ d.x += (dx/dl + wob × (-dy/dl)) × speed × dt
 1. 屏幕震动位移（ctx.translate 随机偏移）
 2. 背景：深蓝垂直渐变 + 44px 网格线（极简还原）
 3. 绿点（浮动动画）→ 武器球（符号 + 光晕）→ 红点（冰冻/电击变色）
-4. 火墙 → 黑洞（倒计时/脉冲）→ 导弹/冲击波 → 炮塔子弹
+4. 火墙 → 黑洞（倒计时/脉冲）→ 扇形冲击波 → 导弹 → 炮塔子弹
 5. 玩家：护盾光圈 / 刺球 / 电弧 / 炮塔形态 / 箭头本体
 6. 冲击波圆环 → 粒子 → 飘字（按 alpha 衰减）
 7. 蓄力/瞄准指示（冲击波圆环、烈焰箭头）
