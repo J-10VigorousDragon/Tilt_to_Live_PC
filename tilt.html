@@ -174,13 +174,14 @@ const rand = (a, b) => a + Math.random() * (b - a);
 const randInt = (a, b) => Math.floor(rand(a, b + 1));
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const dist2 = (ax, ay, bx, by) => { const dx = ax - bx, dy = ay - by; return dx * dx + dy * dy; };
-// 扇形命中判定：点 (dx,dy) 是否在中心 (ox,oy)、方向角 dir、当前半径 r、半角 halfA 的扇形内
-function fanHit(ox, oy, dir, r, halfA, dx, dy) {
-  const rx = dx - ox, ry = dy - oy;
-  if (rx * rx + ry * ry > r * r) return false;          // 超出当前半径（未扩散到）
-  const dl = Math.hypot(rx, ry) || 1;
+// 胶囊形命中判定：波中心 (cx,cy)、方向 dir、半宽 halfW、尾长 tailL、目标点 (px,py)
+// 形状：前端为半圆（半径 halfW），后端为矩形（宽 2×halfW、长 tailL）——即 Wave 冲击波
+function capHit(cx, cy, dir, halfW, tailL, px, py) {
+  const rx = px - cx, ry = py - cy;
   const ca = Math.cos(dir), sa = Math.sin(dir);
-  return (rx * ca + ry * sa) / dl > Math.cos(halfA);     // 与波方向的夹角小于半角
+  const t = clamp(rx * ca + ry * sa, -tailL, halfW);   // 投影到中心线（前段半圆、后段矩形）
+  const dx = rx - ca * t, dy = ry - sa * t;
+  return dx * dx + dy * dy <= halfW * halfW;
 }
 
 // ---------------- 画布与全局状态 ----------------
@@ -216,6 +217,7 @@ const G = {   // 一局游戏的动态状态
   turretT: 0,                 // 炮塔剩余秒数
   burnState: null,            // 烈焰冲刺：{t, aim} / {t, dir}
   waveCharge: 0,              // 冲击波蓄力
+  iceBurst: null,             // 冰刺放射特效：{x, y, t, len}（冰爆释放时创建）
   shake: 0,                   // 屏幕震动强度
   flash: 0,                   // 全屏白闪
   redFlash: 0,                // 死亡红闪
@@ -391,11 +393,12 @@ function useWeapon(id) {
       }
       break;
     }
-    case "ice": {    // 冰冻周围
+    case "ice": {    // 冰冻周围：向四周放射冰刺（视觉），范围内红点被冻住
       SFX.ice();
-      addRing(P.x, P.y, R(200), "#8fd8ff");
+      G.iceBurst = { x: P.x, y: P.y, t: 0, len: R(230) };   // 冰刺放射特效（范围 200→230，+15%）
+      addRing(P.x, P.y, R(230), "#8fd8ff");
       for (const d of G.dots) {
-        if (dist2(d.x, d.y, P.x, P.y) < R(200) * R(200)) d.frozen = 5;
+        if (dist2(d.x, d.y, P.x, P.y) < R(230) * R(230)) d.frozen = 5;
       }
       break;
     }
@@ -526,22 +529,22 @@ function update(dt) {
       if (Math.hypot(P.vx, P.vy) > 30) a = Math.atan2(P.vy, P.vx);
       else if (M.active) a = Math.atan2(M.y - P.y, M.x - P.x);
       else a = G._lastDirX ? Math.atan2(G._lastDirY, G._lastDirX) : 0;
-      // 月牙半径固定 = 8 个背景格（44px/格 = 352px），不随 scale 缩放（用户以格数为准）
-      G.fans.push({ x: P.x, y: P.y, dir: a, halfA: 0.55, t: 0, speed: 900, r: 8 * 44 });
+      // 胶囊形冲击波：前端半圆（半径 200）+ 矩形尾端（宽 400、长 200），整体沿 dir 平移
+      G.fans.push({ x: P.x, y: P.y, dir: a, t: 0, speed: 900, halfW: 200, tailL: 200 });
       SFX.wave();
     }
   }
-  // 月牙形冲击波：固定大小（半径 8 格）沿面朝方向整体平移，直到冲出地图尽头
+  // 胶囊形冲击波：前端圆弧 + 矩形尾端，沿面朝方向整体平移，直到冲出地图尽头
   for (let i = G.fans.length - 1; i >= 0; i--) {
     const f = G.fans[i];
     f.t += dt;
     f.x += Math.cos(f.dir) * f.speed * dt;   // 波中心整体平移
     f.y += Math.sin(f.dir) * f.speed * dt;
     for (const d of [...G.dots]) {
-      if (fanHit(f.x, f.y, f.dir, f.r, f.halfA, d.x, d.y)) killDot(d, "wave");
+      if (capHit(f.x, f.y, f.dir, f.halfW, f.tailL, d.x, d.y)) killDot(d, "wave");
     }
-    // 中心推进超过地图对角线 + 月牙半径后消散（冲击波已冲过地图尽头）
-    if (f.t * f.speed > Math.hypot(W, H) + f.r) G.fans.splice(i, 1);
+    // 中心推进超过地图对角线 + 波纵深后消散（冲击波已冲过地图尽头）
+    if (f.t * f.speed > Math.hypot(W, H) + f.halfW + f.tailL) G.fans.splice(i, 1);
   }
 
   // --- 武器持续效果 ---
@@ -549,6 +552,11 @@ function update(dt) {
   G.lightningT = Math.max(0, G.lightningT - dt);
   G.turretT = Math.max(0, G.turretT - dt);
   G.invincible = Math.max(0, G.invincible - dt);
+  // 冰刺放射特效生命周期（0.5s 后消失）
+  if (G.iceBurst) {
+    G.iceBurst.t += dt;
+    if (G.iceBurst.t > 0.5) G.iceBurst = null;
+  }
 
   // 炮塔射击
   if (G.turretT > 0) {
@@ -869,7 +877,7 @@ function startGame() {
   G.combo = 0; G.comboBest = 0; G.comboTimer = 0;
   G.shield = false; G.invincible = 0;
   G.spikeT = 0; G.lightningT = 0; G.turretT = 0;
-  G.burnState = null; G.waveCharge = 0;
+  G.burnState = null; G.waveCharge = 0; G.iceBurst = null;
   G.shake = 0; G.flash = 0; G.redFlash = 0;
   G.dots = []; G.greensList = []; G.orbs = [];
   G.particles = []; G.rings = []; G.missiles = []; G.bullets = [];
@@ -1001,7 +1009,7 @@ function draw() {
     ctx.restore();
   }
 
-  // 月牙形冲击波（Wave）：固定大小，沿面朝方向整体平移（直到地图尽头）
+  // 胶囊形冲击波（Wave）：前端圆弧 + 矩形尾端，沿面朝方向整体平移（直到地图尽头）
   for (const f of G.fans) {
     // 推进越远越淡
     const alpha = (clamp(1 - (f.t * f.speed) / (Math.hypot(W, H) + 200), 0, 1) * 0.7 + 0.3) * 0.85;
@@ -1009,22 +1017,24 @@ function draw() {
     ctx.translate(f.x, f.y);
     ctx.rotate(f.dir);
     ctx.globalAlpha = alpha;
-    // 半透明外缘（弧形渐隐）
-    const grad = ctx.createRadialGradient(0, 0, f.r * 0.3, 0, 0, f.r);
-    grad.addColorStop(0, "rgba(180,130,255,0.5)");
-    grad.addColorStop(0.6, "rgba(160,100,255,0.25)");
-    grad.addColorStop(1, "rgba(120,70,200,0)");
+    // 渐变填充：前端亮、尾端淡
+    const grad = ctx.createLinearGradient(-f.tailL, 0, f.halfW, 0);
+    grad.addColorStop(0, "rgba(140,100,240,0.15)");
+    grad.addColorStop(0.7, "rgba(170,120,255,0.45)");
+    grad.addColorStop(1, "rgba(200,160,255,0.7)");
     ctx.fillStyle = grad;
+    // 前端半圆 + 矩形尾端（胶囊形）
     ctx.beginPath();
-    ctx.arc(0, 0, f.r, -f.halfA, f.halfA);
-    ctx.lineTo(0, 0);
+    ctx.arc(0, 0, f.halfW, -Math.PI / 2, Math.PI / 2);
+    ctx.lineTo(-f.tailL, f.halfW);
+    ctx.lineTo(-f.tailL, -f.halfW);
     ctx.closePath();
     ctx.fill();
-    // 圆弧外缘线条
-    ctx.strokeStyle = "rgba(200,170,255,0.6)";
-    ctx.lineWidth = 2.5;
+    // 前端圆弧描边
+    ctx.strokeStyle = "rgba(210,180,255,0.8)";
+    ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.arc(0, 0, f.r, -f.halfA, f.halfA);
+    ctx.arc(0, 0, f.halfW, -Math.PI / 2, Math.PI / 2);
     ctx.stroke();
     ctx.globalAlpha = 1;
     ctx.restore();
@@ -1087,6 +1097,31 @@ function draw() {
   }
   // 箭头本体（带尾焰/蓄力指示）
   drawArrow();
+
+  // 冰刺放射特效（冰爆）：12 根冰刺从玩家向四周射出（0.35s 伸长动画）
+  if (G.iceBurst) {
+    const ib = G.iceBurst;
+    const prog = Math.min(1, ib.t / 0.35);   // 刺伸长进度
+    ctx.save();
+    ctx.translate(ib.x, ib.y);
+    ctx.fillStyle = "rgba(140,220,255,0.85)";
+    ctx.shadowColor = "#9fd8ff"; ctx.shadowBlur = 12;
+    for (let k = 0; k < 12; k++) {
+      ctx.save();
+      ctx.rotate((k / 12) * Math.PI * 2 + Math.PI / 24);
+      const len = ib.len * prog;
+      // 冰刺：根部宽、尖端细的三角形
+      ctx.beginPath();
+      ctx.moveTo(0, -R(5));
+      ctx.lineTo(len, 0);
+      ctx.lineTo(0, R(5));
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+    ctx.shadowBlur = 0;
+    ctx.restore();
+  }
 
   // 冲击波圆环
   for (const rg of G.rings) {

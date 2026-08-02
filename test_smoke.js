@@ -87,7 +87,8 @@ drive(180, "游戏3秒");
 console.log("✓ 正常游戏 3 秒无异常（红点数:", G().dots.length, "绿点:", G().greensList.length, "）");
 
 // 3b) 玩家移动断言（P0 回归防护：v2 曾误删速度积分行导致箭头无法移动）
-run("P.x = 100; P.y = 100; P.vx = 0; P.vy = 0");
+// 清空红点 + 强制 playing：排除随机死亡（state=dying 时 update 停止）对断言的干扰
+run("G.dots = []; G.state = 'playing'; P.x = 100; P.y = 100; P.vx = 0; P.vy = 0");
 drive(60, "移动断言");
 const px = run("P.x"), py = run("P.y");
 if (Math.abs(px - 100) < 30 && Math.abs(py - 100) < 30) {
