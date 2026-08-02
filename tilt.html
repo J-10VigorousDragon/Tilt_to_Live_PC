@@ -447,6 +447,7 @@ function fireBurnicade() {
 
 // ---------------- 主更新逻辑 ----------------
 function update(dt) {
+  if (!(dt > 0) || dt > 0.1) return;   // 防御：dt 异常（负值/超大）时跳过本帧，防止数值爆炸
   G.time += dt;
   // 连击计时：窗口结束 → 结算连击分 n×n×6
   if (G.comboTimer > 0) {
@@ -465,13 +466,16 @@ function update(dt) {
     const dx = M.x - P.x, dy = M.y - P.y, d = Math.hypot(dx, dy);
     if (d > 1) {
       const nx = dx / d, ny = dy / d;
-      // 距离自适应加速度（"磁铁式"）：离得远时强力吸附快速追上鼠标，
-      // 离得近时力度变细腻，便于精控（解决"鼠标与箭头距离过远/不跟手"）
-      const accel = Math.min(CFG.playerAccel + d * 10, CFG.playerAccelMax);
+      // 距离自适应加速度（"磁铁式"）：只在刹车区外生效（远距离强力吸附快速追上鼠标），
+      // 进入刹车区后恢复基础加速度，避免高速冲入时刹不住而在鼠标附近振荡
+      const accel = d > CFG.mouseStopDist
+        ? Math.min(CFG.playerAccel + (d - CFG.mouseStopDist) * 10, CFG.playerAccelMax)
+        : CFG.playerAccel;
       accX = nx * accel; accY = ny * accel;
-      // 靠近鼠标时刹车（像磁铁吸住，避免抖动）
+      // 靠近鼠标时刹车：静态刹车 + 速度相关动态刹车（速度越快刹得越狠，高速也能停稳）
       if (d < CFG.mouseStopDist) {
-        const k = (1 - d / CFG.mouseStopDist) * 2600;
+        const sp = Math.hypot(P.vx, P.vy);
+        const k = (1 - d / CFG.mouseStopDist) * 2600 + sp * 3.2;
         accX -= nx * k; accY -= ny * k;
       }
     }
@@ -480,6 +484,8 @@ function update(dt) {
     accX = G._lastDirX * CFG.playerAccel * 0.8;
     accY = G._lastDirY * CFG.playerAccel * 0.8;
   }
+  // 施加加速度到速度（P0 回归修复：v2 重排阻尼/限速时误删此行，导致箭头无法移动）
+  P.vx += accX * dt; P.vy += accY * dt;
   // 阻尼：冲刺期也要阻尼，否则会永久保持更高速度
   const damp = Math.exp(-CFG.playerDamping * dt);
   P.vx *= damp; P.vy *= damp;

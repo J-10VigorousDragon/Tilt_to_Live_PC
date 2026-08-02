@@ -86,6 +86,15 @@ run("M.x = 900; M.y = 600; M.active = true");
 drive(180, "游戏3秒");
 console.log("✓ 正常游戏 3 秒无异常（红点数:", G().dots.length, "绿点:", G().greensList.length, "）");
 
+// 3b) 玩家移动断言（P0 回归防护：v2 曾误删速度积分行导致箭头无法移动）
+run("P.x = 100; P.y = 100; P.vx = 0; P.vy = 0");
+drive(60, "移动断言");
+const px = run("P.x"), py = run("P.y");
+if (Math.abs(px - 100) < 30 && Math.abs(py - 100) < 30) {
+  throw new Error("玩家箭头未移动（速度积分失效？）P=(" + px + "," + py + ")");
+}
+console.log("✓ 玩家箭头跟随鼠标移动正常（P 位移", Math.abs(px - 100).toFixed(0) + "px）");
+
 // 4) 强制吃绿点触发武器解锁（跨局货币 greensTotal，走真实保存路径）
 for (let i = 0; i < 25; i++) { G().greens++; G().greensTotal++; run("saveGreensTotal(G.greensTotal)"); run("checkUnlock()"); }
 console.log("✓ 武器解锁:", [...G().unlocked].join(","), "下一武器:", G().nextWeapon?.name);
