@@ -117,8 +117,8 @@ const CFG = {
   playerDamping: 0.7,       // 鼠标移出窗口后的滑行阻尼
   playerRadius: 9,          // 碰撞判定半径基准（实际按 scale 等比放大）
   // 红点敌人
-  dotRadius: 11,
-  fastDotRadius: 7,
+  dotRadius: 9,          // 11→9（v3.4：缩小 20%）
+  fastDotRadius: 6,      // 7→6（v3.4：缩小 20%）
   bigDotRadius: 17,
   dotSpeedBase: 115,        // 初始速度
   dotSpeedRamp: 0.45,       // 每秒加速
@@ -137,8 +137,8 @@ const CFG = {
   greenCollectDist: 22,
   // 武器球 Orbs
   orbCount: 3,              // 同时在场数量（原版经典）
-  orbRadius: 24,
-  orbCollectDist: 36,
+  orbRadius: 11,            // 24→11（v3.4：与红点同尺寸）
+  orbCollectDist: 26,       // 36→26（适配小武器球）
   // 连击
   comboWindow: 1.5,         // 连击窗口（秒），窗口内连续击杀维持连击
 };
@@ -379,7 +379,7 @@ function useWeapon(id) {
       break;
     }
     case "wave": {   // 蓄力后朝移动方向发射冲击波
-      G.waveCharge = 0.5;
+      G.waveCharge = 0.2;   // v3.4：0.5→0.2s（停滞大大缩短）
       SFX.wave();
       break;
     }
@@ -516,29 +516,32 @@ function update(dt) {
       if (bs.t <= 0) G.burnState = null;
     }
   }
-  // 冲击波蓄力
+  // 冲击波蓄力（v3.4：蓄力极短 + 轻微减速，几乎无停滞感）
   if (G.waveCharge > 0) {
     G.waveCharge -= dt;
-    P.vx *= 0.6; P.vy *= 0.6;   // 蓄力时减速
+    P.vx *= 0.85; P.vy *= 0.85;   // 0.6→0.85：几乎不减速
     if (G.waveCharge <= 0) {
-      // 朝当前移动方向（或鼠标方向）张开扇形冲击波（圆弧扩散）
+      // 朝当前移动方向（或鼠标方向）发射固定大小的月牙形冲击波（整体平移）
       let a;
       if (Math.hypot(P.vx, P.vy) > 30) a = Math.atan2(P.vy, P.vx);
       else if (M.active) a = Math.atan2(M.y - P.y, M.x - P.x);
       else a = G._lastDirX ? Math.atan2(G._lastDirY, G._lastDirX) : 0;
-      G.fans.push({ x: P.x, y: P.y, dir: a, halfA: 0.55, t: 0, speed: 900 });  // 半角≈31.5°（张角约63°）
+      // 月牙半径固定 = 8 个背景格（44px/格 = 352px），不随 scale 缩放（用户以格数为准）
+      G.fans.push({ x: P.x, y: P.y, dir: a, halfA: 0.55, t: 0, speed: 900, r: 8 * 44 });
       SFX.wave();
     }
   }
-  // 扇形冲击波：从发射点沿面朝方向持续推进（半径按速度增长），直到覆盖整个地图
+  // 月牙形冲击波：固定大小（半径 8 格）沿面朝方向整体平移，直到冲出地图尽头
   for (let i = G.fans.length - 1; i >= 0; i--) {
     const f = G.fans[i];
     f.t += dt;
-    f.r = f.speed * f.t;                  // 半径 = 波已推进的距离
+    f.x += Math.cos(f.dir) * f.speed * dt;   // 波中心整体平移
+    f.y += Math.sin(f.dir) * f.speed * dt;
     for (const d of [...G.dots]) {
       if (fanHit(f.x, f.y, f.dir, f.r, f.halfA, d.x, d.y)) killDot(d, "wave");
     }
-    if (f.r > Math.hypot(W, H) + 200) G.fans.splice(i, 1);   // 冲过地图尽头后消散
+    // 中心推进超过地图对角线 + 月牙半径后消散（冲击波已冲过地图尽头）
+    if (f.t * f.speed > Math.hypot(W, H) + f.r) G.fans.splice(i, 1);
   }
 
   // --- 武器持续效果 ---
@@ -930,7 +933,7 @@ function draw() {
     ctx.beginPath(); ctx.arc(0, 0, R(CFG.orbRadius), 0, 6.29); ctx.fill();
     ctx.shadowBlur = 0;
     ctx.fillStyle = "#0b1033";
-    ctx.font = `bold ${R(22)}px sans-serif`;
+    ctx.font = `bold ${R(14)}px sans-serif`;
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText(w.sym, 0, 1);
     ctx.restore();
@@ -998,9 +1001,10 @@ function draw() {
     ctx.restore();
   }
 
-  // 扇形冲击波（Wave）：从玩家处沿面朝方向推进的紫色扇形（直到地图尽头）
+  // 月牙形冲击波（Wave）：固定大小，沿面朝方向整体平移（直到地图尽头）
   for (const f of G.fans) {
-    const alpha = (clamp(1 - f.r / (Math.hypot(W, H) + 200), 0, 1) * 0.7 + 0.3) * 0.85;  // 推进越远越淡
+    // 推进越远越淡
+    const alpha = (clamp(1 - (f.t * f.speed) / (Math.hypot(W, H) + 200), 0, 1) * 0.7 + 0.3) * 0.85;
     ctx.save();
     ctx.translate(f.x, f.y);
     ctx.rotate(f.dir);
@@ -1114,7 +1118,7 @@ function draw() {
 
   // 蓄力指示（冲击波）
   if (G.waveCharge > 0) {
-    const prog = 1 - G.waveCharge / 0.5;
+    const prog = 1 - G.waveCharge / 0.2;
     ctx.strokeStyle = "rgba(200,160,255,0.8)";
     ctx.lineWidth = 3;
     ctx.beginPath(); ctx.arc(P.x, P.y, R(26) + prog * R(14), 0, 6.29); ctx.stroke();
