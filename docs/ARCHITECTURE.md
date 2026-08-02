@@ -91,7 +91,8 @@ menu ──startGame()──▶ playing ──P键──▶ paused
 |------|------|------|
 | `state` | string | menu / playing / paused / dying / over |
 | `time` | number | 本局存活秒数（难度曲线的自变量） |
-| `score` / `greens` | number | 得分 / 收集绿点数（= 武器解锁货币） |
+| `score` / `greens` | number | 得分 / 本局收集绿点数 |
+| `greensTotal` | number | 跨局累计绿点（武器解锁货币，localStorage 持久化） |
 | `combo` / `comboTimer` / `comboBest` | number | 当前连击 / 窗口剩余时间 / 历史最高连击 |
 | `unlocked` | Set | 已解锁武器 id 集合 |
 | `nextWeapon` | object | 下一个待解锁的武器（来自 UNLOCKS） |
@@ -149,7 +150,10 @@ M = { x, y, active, dirX, dirY }
 dir = 朝玩家方向
 wobble = sin(time × 3 + phase) × 0.35   ← 垂直方向的摆动，避免直线逼近
 d.x += (dx/dl + wob × (-dy/dl)) × speed × dt
-红点互碰：O(n²) 两两检查，重叠时对半分推（早退优化：先算平方距离）
+红点互碰：空间网格分离（v3 起，替代 v1/v2 的 O(n²)）
+  · 把红点按 48px 格子分桶（Map<string, array>），每帧重建 O(n)
+  · 只检查本格内部 + 右/下/右下/左下四个邻格，每对红点恰好检查一次
+  · 红点最大半径 17 < 24px 半格宽，保证重叠只可能出现在相邻格
 玩家判定：距离 < (d.r + playerRadius)² 时：
   冰雕（frozen）→ 优先撞碎，谁都能碎（+10 分，不重置连击）
   护盾激活 → 消耗护盾 + 爆炸清场
@@ -180,7 +184,7 @@ d.x += (dx/dl + wob × (-dy/dl)) × speed × dt
 ### 4.5 武器系统
 
 - 场上同时存在 `CFG.orbCount`(3) 个武器球，收一个后同帧补刷，从"已解锁池"随机刷新一个（保持数量恒定，避免溢出）
-- 解锁：累计绿点达到 `UNLOCKS` 门槛 → 加入已解锁池 + 飘字/音效提示
+- 解锁：**跨局累计绿点**（`greensTotal`，localStorage 持久化）达到 `UNLOCKS` 门槛 → 永久解锁 + 飘字/音效提示；已解锁列表同样持久化，开局恢复
 - 释放：`useWeapon(id)` 立即生效（冲击波/烈焰有蓄力演出）
 - 详情数值见 [GAME_DESIGN.md](GAME_DESIGN.md)
 
@@ -198,8 +202,8 @@ d.x += (dx/dl + wob × (-dy/dl)) × speed × dt
 9. 全屏特效：白闪（武器释放）/ 红闪（死亡渐入）
 ```
 
-性能要点：粒子上限 700（超出丢弃最早粒子）；红点上限 `CFG.maxDots`(450)；
-分离检测用平方距离早退；`ctx.shadowBlur` 只在需要的实体上开启（它是昂贵的滤镜）。
+性能要点：粒子上限 700（满员丢弃新粒子，O(1)）；红点上限 `CFG.maxDots`(450)；
+红点分离用空间网格（O(n)）；`ctx.shadowBlur` 只在需要的实体上开启（它是昂贵的滤镜）。
 
 ## 6. 音效设计
 
@@ -212,7 +216,7 @@ d.x += (dx/dl + wob × (-dy/dl)) × speed × dt
 
 ## 7. 持久化与兼容性
 
-- `localStorage` 存两项：`ttl_best`（最高分）、`ttl_muted`（静音）
+- `localStorage` 存四项：`ttl_best`（最高分）、`ttl_muted`（静音）、`ttl_greens`（武器货币）、`ttl_unlocked`（已解锁武器）
 - `file://` 协议下部分浏览器会拒绝 localStorage（隐私模式/Firefox），
   所有读写都包了 try/catch，失败时静默降级（最高分仅本局有效）
 - 键盘兼容：R 重开 / P 暂停 / M 静音 / 空格与回车开始

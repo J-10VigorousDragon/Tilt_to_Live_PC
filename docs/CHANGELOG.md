@@ -2,7 +2,31 @@
 
 > 记录 Tilt to Live 鼠标版的版本变更。格式：[Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 简化版。
 >
-> 版本号约定：`v2`、`v2.1`… 递增。本次从 v1（`e5c9ad1`）后进入 v2 迭代。
+> 版本号约定：`v2`、`v3`… 递增。
+
+## [v3] - 2026-08-02
+
+### 新增
+
+- **武器解锁改为跨局永久进度**（P0-2 绿点经济修复）：新增 `greensTotal` 跨局累计货币（localStorage `ttl_greens` 实时持久化）与已解锁武器列表持久化（`ttl_unlocked`）。解锁是永久进度（类似原版 Pocket Points），不再随单局重置；开局恢复存档并计算下一个待解锁武器。
+  - 新增 `loadGreensTotal/saveGreensTotal/loadUnlocked/saveUnlocked` 存储函数（含 file:// 异常保护）
+  - `checkUnlock` 改为递归连锁解锁（一次性跨过多个门槛），解锁即写入存档
+  - HUD 解锁进度条显示累计货币；开始菜单与结算面板新增"武器货币 / 已解锁 N/10"显示
+
+### 性能
+
+- **红点互碰分离 O(n²) → 空间网格 O(n)**（P2-7）：按 48px 格子分桶（`Map<string, array>`，每帧重建 O(n)），只检查本格内部与右/下/右下/左下四个邻格，每对红点恰好检查一次；红点最大半径 17 < 半格宽 24，保证正确性。红点上限 450 不再构成每帧 10 万次比较。
+- **粒子满员丢弃 O(1)**（P2-8）：`spawnParticle` 满 700 时直接丢弃新粒子，替代原 `shift()` 的 O(n) 全数组搬移。
+
+### 清理
+
+- 移除 `G.freezeTime` 死字段（v1 遗留、从未使用）、`G.redFlash` 重复定义
+- 修复 Wave 扇形绘制代码块缩进错乱
+
+### 测试
+
+- `test_smoke.js` 新增跨局持久化断言：解锁写入 localStorage → 重开后已解锁武器与货币均恢复
+- 全部通过（10 种武器触发、死亡流程、重开、跨局恢复）
 
 ## [v2] - 2026-08-02
 

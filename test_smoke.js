@@ -86,9 +86,18 @@ run("M.x = 900; M.y = 600; M.active = true");
 drive(180, "游戏3秒");
 console.log("✓ 正常游戏 3 秒无异常（红点数:", G().dots.length, "绿点:", G().greensList.length, "）");
 
-// 4) 强制吃绿点触发武器解锁
-for (let i = 0; i < 25; i++) { G().greens++; run("checkUnlock()"); }
+// 4) 强制吃绿点触发武器解锁（跨局货币 greensTotal，走真实保存路径）
+for (let i = 0; i < 25; i++) { G().greens++; G().greensTotal++; run("saveGreensTotal(G.greensTotal)"); run("checkUnlock()"); }
 console.log("✓ 武器解锁:", [...G().unlocked].join(","), "下一武器:", G().nextWeapon?.name);
+if (![...G().unlocked].includes("ice")) throw new Error("20 绿点门槛未解锁 ice");
+
+// 4b) 验证跨局持久化：解锁写入 localStorage，重开后仍持有
+const saved = JSON.parse(sandbox.localStorage._d["ttl_unlocked"] || "[]");
+if (!saved.includes("ice")) throw new Error("跨局解锁未写入 localStorage");
+run("startGame()");
+if (![...G().unlocked].includes("ice")) throw new Error("重开后已解锁武器丢失（跨局未恢复）");
+if (G().greensTotal !== 25) throw new Error("重开后武器货币未恢复");
+console.log("✓ 跨局解锁持久化正常（重开后仍持有 ice，货币=25）");
 
 // 5) 逐一触发全部 10 种武器
 for (const w of ["nuke", "wave", "missiles", "ice", "bubble", "vortex", "spike", "lightning", "burnicade", "turret"]) {

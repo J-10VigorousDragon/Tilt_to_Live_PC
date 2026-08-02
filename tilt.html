@@ -79,6 +79,7 @@
     </div>
     <div class="btn" id="startBtn">开 始 游 戏</div>
     <div class="hiscore" id="menuHis"></div>
+    <div class="hiscore" id="menuMeta" style="margin-top:6px;color:#8dfc9a;font-size:13px"></div>
   </div>
 </div>
 
@@ -93,6 +94,7 @@
       </div>
     </div>
     <div class="hiscore" id="finalHis"></div>
+    <div class="hiscore" id="finalMeta" style="font-size:13px;color:#8dfc9a"></div>
     <div class="achievement" id="finalAch"></div>
     <div class="btn" id="retryBtn" style="margin-top:24px">再 来 一 局</div>
   </div>
@@ -209,7 +211,6 @@ const G = {   // 一局游戏的动态状态
   turretT: 0,                 // 炮塔剩余秒数
   burnState: null,            // 烈焰冲刺：{t, aim} / {t, dir}
   waveCharge: 0,              // 冲击波蓄力
-  freezeTime: 0,              // 全场慢动作（武器演出用）
   shake: 0,                   // 屏幕震动强度
   flash: 0,                   // 全屏白闪
   redFlash: 0,                // 死亡红闪
@@ -219,9 +220,9 @@ const G = {   // 一局游戏的动态状态
   floats: [],                 // 飘字（得分提示）
   spawnAcc: 0,
   best: 0,
+  greensTotal: 0,       // 跨局累计绿点数（武器解锁货币，localStorage 持久化）
   turretFire: 0,       // 炮塔射击计时器
   lightningTick: 0,    // 闪电放电计时器
-  redFlash: 0,         // 死亡红闪进度
   _lastDirX: 1, _lastDirY: 0,   // 鼠标移出窗口后保持的最后方向
 };
 
@@ -283,7 +284,7 @@ const SFX = {
 
 // ---------------- 粒子 / 冲击波 / 飘字（特效对象池） ----------------
 function spawnParticle(x, y, vx, vy, life, color, size) {
-  if (G.particles.length > 700) G.particles.shift();
+  if (G.particles.length >= 700) return;   // 满员丢弃（O(1)，替代 shift() 的 O(n) 搬移）
   G.particles.push({ x, y, vx, vy, life, maxLife: life, color, size });
 }
 function burst(x, y, n, color, speed = 260) {
@@ -592,18 +593,47 @@ function update(dt) {
     d.y += (dy / dl - wob * (dx / dl)) * spd * dt;
     // 红点之间互碰分离（避免叠成一团）
   }
-  // 分离（O(n²)，早退优化）
-  for (let i = 0; i < G.dots.length; i++) {
-    const a = G.dots[i];
-    for (let j = i + 1; j < G.dots.length; j++) {
-      const b = G.dots[j];
-      const rr = a.r + b.r, dx = b.x - a.x, dy = b.y - a.y;
-      const d2v = dx * dx + dy * dy;
-      if (d2v < rr * rr && d2v > 0.01) {
-        const d = Math.sqrt(d2v), push = (rr - d) / 2;
-        const nx = dx / d, ny = dy / d;
-        a.x -= nx * push; a.y -= ny * push;
-        b.x += nx * push; b.y += ny * push;
+  // 红点互碰分离（空间网格，O(n) 替代 O(n²)：把红点按 48px 格子分桶，只检查本格与相邻格）
+  // 红点最大半径 17（大灰点），48px 格保证重叠只可能发生在相邻格内
+  const CS = 48;
+  const grid = new Map();
+  for (const d of G.dots) {
+    const kx = Math.floor(d.x / CS), ky = Math.floor(d.y / CS);
+    const key = kx + "," + ky;
+    let arr = grid.get(key);
+    if (!arr) grid.set(key, arr = []);
+    arr.push(d);
+  }
+  for (const [key, arr] of grid) {
+    const [kx, ky] = key.split(",").map(Number);
+    for (let i = 0; i < arr.length; i++) {
+      const a = arr[i];
+      // 本格内部两两（i<j 不重复）
+      for (let j = i + 1; j < arr.length; j++) {
+        const b = arr[j];
+        const rr = a.r + b.r, dx = b.x - a.x, dy = b.y - a.y;
+        const d2v = dx * dx + dy * dy;
+        if (d2v < rr * rr && d2v > 0.01) {
+          const d = Math.sqrt(d2v), push = (rr - d) / 2;
+          const nx = dx / d, ny = dy / d;
+          a.x -= nx * push; a.y -= ny * push;
+          b.x += nx * push; b.y += ny * push;
+        }
+      }
+      // 只查右/下/右下/左下四个邻格，保证每对红点恰好检查一次
+      for (const [ox, oy] of [[1, 0], [0, 1], [1, 1], [-1, 1]]) {
+        const other = grid.get((kx + ox) + "," + (ky + oy));
+        if (!other) continue;
+        for (const b of other) {
+          const rr = a.r + b.r, dx = b.x - a.x, dy = b.y - a.y;
+          const d2v = dx * dx + dy * dy;
+          if (d2v < rr * rr && d2v > 0.01) {
+            const d = Math.sqrt(d2v), push = (rr - d) / 2;
+            const nx = dx / d, ny = dy / d;
+            a.x -= nx * push; a.y -= ny * push;
+            b.x += nx * push; b.y += ny * push;
+          }
+        }
       }
     }
   }
@@ -633,6 +663,7 @@ function update(dt) {
     if (dist2(gp.x, gp.y, P.x, P.y) < CFG.greenCollectDist * CFG.greenCollectDist) {
       G.greensList.splice(i, 1);
       G.greens++; G.score++;
+      G.greensTotal++; saveGreensTotal(G.greensTotal);   // 武器货币实时持久化
       burst(gp.x, gp.y, 6, "#7dffa0", 160);
       SFX.green();
       checkUnlock();
@@ -755,22 +786,36 @@ function update(dt) {
   }
 }
 
-// 检查武器解锁（绿点累计）
+// 检查武器解锁（跨局累计绿点达到门槛 → 永久解锁）
 function checkUnlock() {
   const next = G.nextWeapon;
-  if (next && G.greens >= next.need) {
+  if (next && G.greensTotal >= next.need) {
     G.unlocked.add(next.id);
+    saveUnlocked([...G.unlocked]);          // 永久保存解锁进度
     SFX.unlock();
     addFloat(W / 2, H * 0.25, `🔓 解锁武器：${next.name}！`, "#ffd98a", 24);
     burst(W / 2, H * 0.25 + 30, 24, "#ffd98a", 300);
     const idx = UNLOCKS.indexOf(next);
     G.nextWeapon = idx < UNLOCKS.length - 1 ? UNLOCKS[idx + 1] : null;
+    checkUnlock();                           // 可能连跨多个门槛，递归检查下一个
   }
 }
 
 // 最高分读写（localStorage 在部分浏览器 file:// 下可能抛异常，包一层保险）
 function loadBest() { try { return Number(localStorage.getItem("ttl_best") || 0); } catch (e) { return 0; } }
 function saveBest(v) { try { localStorage.setItem("ttl_best", v); } catch (e) { /* 忽略 */ } }
+
+// 武器货币（跨局累计绿点）与已解锁武器的持久化
+// 设计：解锁是"永久进度"（类似原版 Pocket Points），不随单局重置
+function loadGreensTotal() { try { return Number(localStorage.getItem("ttl_greens") || 0); } catch (e) { return 0; } }
+function saveGreensTotal(v) { try { localStorage.setItem("ttl_greens", String(v)); } catch (e) { /* 忽略 */ } }
+function loadUnlocked() {
+  try {
+    const arr = JSON.parse(localStorage.getItem("ttl_unlocked") || "[]");
+    return Array.isArray(arr) ? arr.filter(id => WEAPONS[id]) : [];
+  } catch (e) { return []; }
+}
+function saveUnlocked(list) { try { localStorage.setItem("ttl_unlocked", JSON.stringify(list)); } catch (e) { /* 忽略 */ } }
 
 // ---------------- 死亡 ----------------
 function die() {
@@ -797,6 +842,9 @@ function showGameOver() {
   document.getElementById("finalGreens").textContent = G.greens;
   const his = document.getElementById("finalHis");
   his.textContent = `最高分：${G.best.toLocaleString()}` + (G.score >= G.best && G.score > 0 ? "  🏆 新纪录！" : "");
+  // 跨局进度显示（武器货币）
+  document.getElementById("finalMeta").textContent =
+    `武器货币：${G.greensTotal} 绿点（本局 +${G.greens}）· 已解锁 ${G.unlocked.size}/10 种武器`;
   // 段子式成就（致敬原版 46 个 Award Challenges）
   let ach = "";
   if (G.time < 5) ach = "😅 你连 5 秒都没撑过 —— 我们同情你。";
@@ -822,8 +870,10 @@ function startGame() {
   G.particles = []; G.rings = []; G.missiles = []; G.bullets = [];
   G.vortexes = []; G.walls = []; G.floats = []; G.fans = [];
   G.spawnAcc = 0; G.turretFire = 0; G.lightningTick = 0;
-  G.unlocked = new Set(STARTER_ORBS);
-  G.nextWeapon = UNLOCKS[0];
+  // 恢复跨局进度：武器货币 + 永久解锁列表（下一待解锁 = 第一个未解锁的武器）
+  G.greensTotal = loadGreensTotal();
+  G.unlocked = new Set([...STARTER_ORBS, ...loadUnlocked()]);
+  G.nextWeapon = UNLOCKS.find(u => !G.unlocked.has(u.id)) || null;
   G.best = loadBest();
   P.x = W / 2; P.y = H / 2; P.vx = 0; P.vy = 0;
   for (let i = 0; i < CFG.greenTarget; i++) spawnGreen();
@@ -948,33 +998,33 @@ function draw() {
 
   // 扇形冲击波（Wave）：从玩家处外扩的紫色扇形
   for (const f of G.fans) {
-      const alpha = clamp(f.life / 0.9, 0, 1) * 0.85;
-      ctx.save();
-      ctx.translate(f.x, f.y);
-      ctx.rotate(f.dir);
-      ctx.globalAlpha = alpha;
-      // 半透明外缘（弧形渐隐）
-      const grad = ctx.createRadialGradient(0, 0, f.r * 0.3, 0, 0, f.r);
-      grad.addColorStop(0, "rgba(180,130,255,0.5)");
-      grad.addColorStop(0.6, "rgba(160,100,255,0.25)");
-      grad.addColorStop(1, "rgba(120,70,200,0)");
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(0, 0, f.r, -f.halfA, f.halfA);
-      ctx.lineTo(0, 0);
-      ctx.closePath();
-      ctx.fill();
-      // 圆弧外缘线条
-      ctx.strokeStyle = "rgba(200,170,255,0.6)";
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.arc(0, 0, f.r, -f.halfA, f.halfA);
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-      ctx.restore();
-    }
+    const alpha = clamp(f.life / 0.9, 0, 1) * 0.85;
+    ctx.save();
+    ctx.translate(f.x, f.y);
+    ctx.rotate(f.dir);
+    ctx.globalAlpha = alpha;
+    // 半透明外缘（弧形渐隐）
+    const grad = ctx.createRadialGradient(0, 0, f.r * 0.3, 0, 0, f.r);
+    grad.addColorStop(0, "rgba(180,130,255,0.5)");
+    grad.addColorStop(0.6, "rgba(160,100,255,0.25)");
+    grad.addColorStop(1, "rgba(120,70,200,0)");
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(0, 0, f.r, -f.halfA, f.halfA);
+    ctx.lineTo(0, 0);
+    ctx.closePath();
+    ctx.fill();
+    // 圆弧外缘线条
+    ctx.strokeStyle = "rgba(200,170,255,0.6)";
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(0, 0, f.r, -f.halfA, f.halfA);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
 
-    // 炮塔子弹
+  // 炮塔子弹
   ctx.fillStyle = "#8fb8ff";
   for (const b of G.bullets) {
     ctx.beginPath(); ctx.arc(b.x, b.y, 3.5, 0, 6.29); ctx.fill();
@@ -1138,15 +1188,15 @@ function drawHUD() {
   ctx.font = "18px 'Segoe UI', sans-serif";
   const m = Math.floor(G.time / 60), s = Math.floor(G.time % 60);
   ctx.fillText(`${m}:${String(s).padStart(2, "0")}`, W - 18, 16);
-  // 底部：武器解锁进度条
+  // 底部：武器解锁进度条（显示跨局累计货币，而非单局收集数）
   ctx.textAlign = "left";
   const next = G.nextWeapon;
   ctx.font = "13px 'Segoe UI', sans-serif";
   ctx.fillStyle = "rgba(200,215,255,0.8)";
-  const label = next ? `下一武器：${next.name}（${G.greens}/${next.need} 绿点）` : "全部武器已解锁！";
+  const label = next ? `下一武器：${next.name}（${G.greensTotal}/${next.need} 绿点·累计）` : "全部武器已解锁！";
   ctx.fillText(label, 18, H - 34);
   const bw = 200, bh = 8, bx = 18, by = H - 22;
-  const prog = next ? Math.min(1, G.greens / next.need) : 1;
+  const prog = next ? Math.min(1, G.greensTotal / next.need) : 1;
   ctx.fillStyle = "rgba(255,255,255,0.15)";
   ctx.fillRect(bx, by, bw, bh);
   ctx.fillStyle = "#6bff9e";
@@ -1201,7 +1251,11 @@ function loop(now) {
 
 // ---------------- 启动 ----------------
 G.best = loadBest();
+G.greensTotal = loadGreensTotal();
+G.unlocked = new Set([...STARTER_ORBS, ...loadUnlocked()]);
 document.getElementById("menuHis").textContent = G.best > 0 ? `最高分：${G.best.toLocaleString()}` : "暂无记录，创造历史吧！";
+document.getElementById("menuMeta").textContent =
+  `武器货币：${G.greensTotal} 绿点 · 已解锁 ${G.unlocked.size}/10 种武器（绿点跨局累计，永久解锁）`;
 document.getElementById("muteBtn").textContent = muted ? "🔇" : "🔊";
 requestAnimationFrame(loop);
 </script>
