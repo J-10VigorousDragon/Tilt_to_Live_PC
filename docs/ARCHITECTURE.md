@@ -29,12 +29,14 @@ tilt.html
 ├── <body>           canvas + 菜单覆盖层 + 结算覆盖层 + 静音按钮
 └── <script>         游戏逻辑（自上而下）：
     ├── CFG          手感/难度参数（改数值即调参）
+    ├── MODES        模式表（Classic / Code Red，生成率与速度曲线）
     ├── UNLOCKS      武器解锁表（绿点门槛）
     ├── WEAPONS      武器数据（名称/颜色/符号/奖励分）
     ├── STARTER_ORBS 初始武器集合
-    ├── 工具函数      rand / clamp / dist2
+    ├── 工具函数      rand / clamp / dist2 / capHit
     ├── canvas / G / P / M   画布与全局状态
     ├── 音效层        ac() / tone() / noise() / SFX 音效表
+    ├── BGM           Web Audio 合成循环（8 步 bass + lead）
     ├── 特效池        spawnParticle / burst / addRing / addFloat
     ├── 实体生成      spawnDot / spawnGreen / spawnOrb / randomOrbId
     ├── 击杀统一入口  killDot（加分、连击、特效）
@@ -42,7 +44,7 @@ tilt.html
     ├── 主更新        update（物理/追踪/碰撞/武器/生成/特效衰减）
     ├── 解锁检查      checkUnlock
     ├── 死亡流程      die / showGameOver
-    ├── 开局重置      startGame
+    ├── 开局重置      startGame(mode)（重置状态 + 模式选择 + BGM 启动）
     ├── 渲染          draw / drawArrow / drawHUD
     ├── 输入          mousemove / mouseleave / keydown / 按钮
     └── 主循环        loop（dt 计算 → update → draw）

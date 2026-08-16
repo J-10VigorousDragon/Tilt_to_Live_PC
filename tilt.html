@@ -77,7 +77,8 @@
       箭头会"滑"向鼠标 —— 这就是倾斜手感<br>
       <span style="color:#8fa3e0;font-size:13px">R 重新开始 · P 暂停 · M 静音</span>
     </div>
-    <div class="btn" id="startBtn">开 始 游 戏</div>
+    <div class="btn" id="startBtn">🎯 经 典 模 式</div>
+      <div class="btn" id="redBtn" style="margin-top:12px;background:linear-gradient(180deg,#b3243b,#6b1224);border-color:rgba(255,130,140,0.6)">🔥 Code Red 高密度</div>
     <div class="hiscore" id="menuHis"></div>
     <div class="hiscore" id="menuMeta" style="margin-top:6px;color:#8dfc9a;font-size:13px"></div>
   </div>
@@ -143,7 +144,23 @@ const CFG = {
   comboWindow: 1.5,         // 连击窗口（秒），窗口内连续击杀维持连击
 };
 
-// 武器解锁门槛：累计收集多少个绿点解锁（数据参考 Fandom Wiki 的 award points）
+// 游戏模式（Classic 经典模式 / Code Red 高密度模式）
+  // Code Red 参考原版：更高生成率上限与更快红点，给鼠标操作留余量但明显更凶
+  const MODES = {
+    classic: {
+      name: "Classic",
+      spawnRateBase: CFG.spawnRateBase, spawnRateRamp: CFG.spawnRateRamp, spawnRateMax: CFG.spawnRateMax,
+      dotSpeedBase: CFG.dotSpeedBase, dotSpeedRamp: CFG.dotSpeedRamp, dotSpeedMax: CFG.dotSpeedMax,
+    },
+    codered: {
+      name: "Code Red",
+      spawnRateBase: 3.0, spawnRateRamp: 0.10, spawnRateMax: 9.0,
+      dotSpeedBase: 130, dotSpeedRamp: 0.60, dotSpeedMax: 220,
+    },
+  };
+  let GAME_MODE = "classic";   // 当前模式（classic / codered）；重开时沿用同一模式
+
+  // 武器解锁门槛：累计收集多少个绿点解锁（数据参考 Fandom Wiki 的 award points）
 const UNLOCKS = [
   { id: "ice",        need: 20,   name: "冰爆 Ice Blast",      desc: "冻住附近的红点，撞碎它们！" },
   { id: "bubble",     need: 40,   name: "泡泡护盾 Bubble Shield", desc: "碰到红点会爆炸的护盾，第二条命！" },
@@ -175,13 +192,17 @@ const randInt = (a, b) => Math.floor(rand(a, b + 1));
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const dist2 = (ax, ay, bx, by) => { const dx = ax - bx, dy = ay - by; return dx * dx + dy * dy; };
 // 胶囊形命中判定：波中心 (cx,cy)、方向 dir、半宽 halfW、尾长 tailL、目标点 (px,py)
-// 形状：前端为半圆（半径 halfW），后端为矩形（宽 2×halfW、长 tailL）——即 Wave 冲击波
+// 形状：前端为半圆（半径 halfW，圆心在波中心），后端为矩形（宽 2×halfW、长 tailL）——即 Wave 冲击波
+// 判定：先投影到波的局部坐标（lx 沿中心线、ly 垂直中心线），再按半圆/矩形分段判断
 function capHit(cx, cy, dir, halfW, tailL, px, py) {
   const rx = px - cx, ry = py - cy;
   const ca = Math.cos(dir), sa = Math.sin(dir);
-  const t = clamp(rx * ca + ry * sa, -tailL, halfW);   // 投影到中心线（前段半圆、后段矩形）
-  const dx = rx - ca * t, dy = ry - sa * t;
-  return dx * dx + dy * dy <= halfW * halfW;
+  const lx = rx * ca + ry * sa;          // 沿中心线投影
+  const ly = -rx * sa + ry * ca;         // 垂直中心线投影
+  const ax = Math.abs(lx), ay = Math.abs(ly);
+  if (lx >= 0) return ax * ax + ay * ay <= halfW * halfW;   // 前端半圆：到圆心的距离 ≤ halfW
+  if (lx >= -tailL) return ay <= halfW;                     // 后端矩形：|垂直距离| ≤ halfW
+  return false;                                              // 尾端之后：不命中
 }
 
 // ---------------- 画布与全局状态 ----------------
@@ -202,6 +223,7 @@ const R = (v) => v * scale;    // 尺寸换算：基准值 → 当前屏幕实�
 
 const G = {   // 一局游戏的动态状态
   state: "menu",              // menu / playing / dying / over
+  modeName: "Classic",         // 当前模式显示名（startGame 时更新）
   time: 0,                    // 本局存活秒数
   score: 0,
   greens: 0,                  // 本局收集绿点数（= 武器解锁货币）
@@ -289,6 +311,31 @@ const SFX = {
   combo()  { tone(660, 0.08, "triangle", 0.12, 990); },
 };
 
+// ---------------- BGM（简易 Web Audio 循环合成，无外部文件） ----------------
+// 8 步循环：低音走 A-F 进行，高音每两拍点缀一下。静音时 tick 直接跳过（不发声）。
+const BGM = {
+  timer: null,
+  step: 0,
+  start() {
+    if (this.timer) return;
+    this.step = 0;
+    this.timer = setInterval(() => this.tick(), 230);
+  },
+  stop() {
+    if (this.timer) { clearInterval(this.timer); this.timer = null; }
+  },
+  tick() {
+    if (muted || G.state !== "playing") return;
+    const c = ac(); if (!c) return;
+    const bass = [110, 110, 130, 110, 87, 87, 98, 98];   // A2 A2 C3 A2 F2 F2 G2 G2
+    const lead = [440, 440, 523, 440, 349, 349, 392, 392]; // A4 A4 C5 A4 F4 F4 G4 G4
+    const s = this.step % 8;
+    tone(bass[s], 0.22, "triangle", 0.13);
+    if (this.step % 2 === 0) tone(lead[s], 0.11, "sine", 0.05);
+    this.step++;
+  },
+};
+
 // ---------------- 粒子 / 冲击波 / 飘字（特效对象池） ----------------
 function spawnParticle(x, y, vx, vy, life, color, size) {
   if (G.particles.length >= 700) return;   // 满员丢弃（O(1)，替代 shift() 的 O(n) 搬移）
@@ -317,10 +364,11 @@ function spawnDot(type) {
   const cx = W / 2, cy = H / 2, halfW = W / 2 + 30, halfH = H / 2 + 30;
   let x = cx + Math.cos(edge) * halfW, y = cy + Math.sin(edge) * halfH;
   x = clamp(x, 20, W - 20); y = clamp(y, 20, H - 20);
+  const dm = MODES[GAME_MODE] || MODES.classic;
   G.dots.push({
     x, y, r, type,
     speed: big ? CFG.bigDotSpeed : fast ? CFG.fastDotSpeed
-      : Math.min(CFG.dotSpeedBase + G.time * CFG.dotSpeedRamp, CFG.dotSpeedMax),
+      : Math.min(dm.dotSpeedBase + G.time * dm.dotSpeedRamp, dm.dotSpeedMax),
     frozen: 0,        // 冰冻剩余秒数（>0 时静止）
     shocked: 0,       // 被闪电电击的闪烁时间
     wobble: rand(0, 6.28),   // 追踪时的摆动相位
@@ -766,8 +814,9 @@ function update(dt) {
     if (wl.life <= 0) G.walls.splice(i, 1);
   }
 
-  // --- 难度生成：红点生成率随时间提高 ---
-  G.spawnAcc += Math.min(CFG.spawnRateBase + G.time * CFG.spawnRateRamp, CFG.spawnRateMax) * dt;
+  // --- 难度生成：红点生成率随时间提高（当前模式决定生成率曲线） ---
+  const dm2 = MODES[GAME_MODE] || MODES.classic;
+  G.spawnAcc += Math.min(dm2.spawnRateBase + G.time * dm2.spawnRateRamp, dm2.spawnRateMax) * dt;
   while (G.spawnAcc >= 1) {
     G.spawnAcc -= 1;
     let type = "normal";
@@ -834,6 +883,7 @@ function saveUnlocked(list) { try { localStorage.setItem("ttl_unlocked", JSON.st
 function die() {
   G.state = "dying";
   G.redFlash = 0;
+  BGM.stop();
   SFX.death();
   G.shake = 30;
   burst(P.x, P.y, 50, "#ff5555", 480);
@@ -870,7 +920,8 @@ function showGameOver() {
 }
 
 // ---------------- 开始新一局 ----------------
-function startGame() {
+function startGame(mode) {
+  if (mode && MODES[mode]) GAME_MODE = mode;   // 指定模式则切换；无参数时沿用当前模式（R/重开/再试一局）
   // 重置所有状态
   G.state = "playing";
   G.time = 0; G.score = 0; G.greens = 0;
@@ -883,6 +934,7 @@ function startGame() {
   G.particles = []; G.rings = []; G.missiles = []; G.bullets = [];
   G.vortexes = []; G.walls = []; G.floats = []; G.fans = [];
   G.spawnAcc = 0; G.turretFire = 0; G.lightningTick = 0;
+  G.modeName = MODES[GAME_MODE].name;
   // 恢复跨局进度：武器货币 + 永久解锁列表（下一待解锁 = 第一个未解锁的武器）
   G.greensTotal = loadGreensTotal();
   G.unlocked = new Set([...STARTER_ORBS, ...loadUnlocked()]);
@@ -891,6 +943,8 @@ function startGame() {
   P.x = W / 2; P.y = H / 2; P.vx = 0; P.vy = 0;
   for (let i = 0; i < CFG.greenTarget; i++) spawnGreen();
   for (let i = 0; i < CFG.orbCount; i++) spawnOrb(randomOrbId());
+  BGM.start();                             // 背景音乐循环（静音时内部自动不发声）
+  if (!muted) { const c = ac(); if (c && c.resume) c.resume(); }  // 在用户交互调用栈内解锁 AudioContext
   document.getElementById("menu").classList.add("hidden");
   document.getElementById("gameover").classList.add("hidden");
 }
@@ -1223,12 +1277,15 @@ function drawHUD() {
     ctx.font = `bold ${clamp(22 + G.combo * 0.15, 22, 42)}px 'Segoe UI', sans-serif`;
     ctx.fillText(`x${G.combo}`, 20, 54);
   }
-  // 右上：时间
+  // 右上：时间 + 模式名
   ctx.textAlign = "right";
   ctx.fillStyle = "rgba(200,215,255,0.75)";
   ctx.font = "18px 'Segoe UI', sans-serif";
   const m = Math.floor(G.time / 60), s = Math.floor(G.time % 60);
   ctx.fillText(`${m}:${String(s).padStart(2, "0")}`, W - 18, 16);
+  ctx.fillStyle = G.modeName === "Code Red" ? "rgba(255,120,130,0.9)" : "rgba(200,215,255,0.6)";
+  ctx.font = "12px 'Segoe UI', sans-serif";
+  ctx.fillText(G.modeName, W - 18, 40);
   // 底部：武器解锁进度条（显示跨局累计货币，而非单局收集数）
   ctx.textAlign = "left";
   const next = G.nextWeapon;
@@ -1254,22 +1311,27 @@ window.addEventListener("mousemove", (e) => {
   M.x = e.clientX; M.y = e.clientY; M.active = true;
 });
 window.addEventListener("mouseleave", () => { M.active = false; });
-window.addEventListener("mousedown", () => {
+window.addEventListener("mousedown", (e) => {
+  // 点在按钮上时交给按钮自己的 click 处理，避免 Code Red 按钮被 window mousedown 抢开成 Classic
+  if (e.target.closest && e.target.closest(".btn")) return;
   if (G.state === "menu" || G.state === "over") {
-    startGame();
+    startGame(GAME_MODE);
     if (ac()) ac().resume();
   }
 });
 window.addEventListener("keydown", (e) => {
   const k = e.key.toLowerCase();
-  if (k === "r") startGame();
+  // 焦点在按钮上时交给按钮 click（否则回车会先触发这里的 startGame 再触发按钮）
+  if (e.target.closest && e.target.closest(".btn") && (k === "enter" || k === " ")) return;
+  if (k === "r") startGame(GAME_MODE);
   if (k === "m") toggleMute();
   if (k === "p" && (G.state === "playing")) G.state = "paused";
   else if (k === "p" && G.state === "paused") G.state = "playing";
-  if ((k === "enter" || k === " ") && (G.state === "menu" || G.state === "over")) startGame();
+  if ((k === "enter" || k === " ") && (G.state === "menu" || G.state === "over")) startGame(GAME_MODE);
 });
-document.getElementById("startBtn").addEventListener("click", startGame);
-document.getElementById("retryBtn").addEventListener("click", startGame);
+document.getElementById("startBtn").addEventListener("click", () => startGame("classic"));
+document.getElementById("redBtn").addEventListener("click", () => startGame("codered"));
+document.getElementById("retryBtn").addEventListener("click", () => startGame(GAME_MODE));
 document.getElementById("muteBtn").addEventListener("click", toggleMute);
 function toggleMute() {
   muted = !muted;

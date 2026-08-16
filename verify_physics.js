@@ -7,6 +7,7 @@ const fakeEl = () => ({ addEventListener() {}, textContent: "", style: {}, class
 const rafQueue = [];
 const sandbox = {
   console, performance: { now: () => Date.now() }, setTimeout, clearTimeout,
+  setInterval: () => 0, clearInterval: () => {},
   requestAnimationFrame: fn => { rafQueue.push(fn); return rafQueue.length; },
   localStorage: { _d: {}, getItem(k) { return this._d[k] ?? null; }, setItem(k, v) { this._d[k] = String(v); } },
   window: { innerWidth: 1200, innerHeight: 800, addEventListener() {},

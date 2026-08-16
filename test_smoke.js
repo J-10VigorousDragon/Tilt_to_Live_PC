@@ -32,6 +32,8 @@ const sandbox = {
   performance: { now: () => Date.now() },
   setTimeout,
   clearTimeout,
+  setInterval: () => 0,
+  clearInterval: () => {},
   requestAnimationFrame: (fn) => { rafQueue.push(fn); return rafQueue.length; },
   localStorage: {
     _d: {}, getItem(k) { return this._d[k] ?? null; }, setItem(k, v) { this._d[k] = String(v); },
@@ -96,6 +98,14 @@ if (Math.abs(px - 100) < 30 && Math.abs(py - 100) < 30) {
 }
 console.log("✓ 玩家箭头跟随鼠标移动正常（P 位移", Math.abs(px - 100).toFixed(0) + "px）");
 
+// 3c) Wave 命中判定边界回归（v3.6 修复：前端半圆按圆判定、尾端矩形不延伸到尾后）
+const cap = (x, y) => run(`capHit(0,0,0,200,200,${x},${y})`);
+if (!cap(100, 0)) throw new Error("Wave 前端中心点未命中");
+if (!cap(-100, 0)) throw new Error("Wave 尾端矩形中心点未命中");
+if (cap(180, 180)) throw new Error("Wave 前端角外误判命中（半圆外）");
+if (cap(-250, 0)) throw new Error("Wave 尾端后方误判命中");
+console.log("✓ Wave 命中判定边界正常");
+
 // 4) 强制吃绿点触发武器解锁（跨局货币 greensTotal，走真实保存路径）
 for (let i = 0; i < 25; i++) { G().greens++; G().greensTotal++; run("saveGreensTotal(G.greensTotal)"); run("checkUnlock()"); }
 console.log("✓ 武器解锁:", [...G().unlocked].join(","), "下一武器:", G().nextWeapon?.name);
@@ -129,5 +139,14 @@ console.log("✓ 死亡流程正常，最终分数:", G().score, "最高分:", G
 run("startGame()");
 drive(10, "重开");
 console.log("✓ 重新开局正常");
+
+// 8) Code Red 模式切换
+run("startGame('codered')");
+drive(5, "CodeRed开局");
+if (G().modeName !== "Code Red") throw new Error("Code Red 模式切换失败");
+run("startGame('classic')");
+if (G().modeName !== "Classic") throw new Error("Classic 模式切换失败");
+console.log("✓ 模式切换正常（Classic / Code Red）");
+
 console.log("\n🎉 冒烟测试全部通过！");
 })().catch(e => { console.error("✗ 测试失败:", e.message); process.exit(1); });
